@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,6 +18,13 @@ const (
 	RKE2ConfigFile   = "/etc/rancher/rke2/config.yaml"
 	RKE2CustomConfig = "/etc/rancher/rke2/config.yaml.d/00-rbd.yaml"
 )
+
+// FileArtifact 文件传输配置
+type FileArtifact struct {
+	localPath  string
+	remotePath string
+	required   bool
+}
 
 type RKE2Installer struct {
 	config *config.Config
@@ -492,11 +500,7 @@ func (r *RKE2Installer) transferRKE2Artifacts(host config.Host) error {
 	r.logger.Infof("主机 %s: 开始传输RKE2离线资源文件", host.IP)
 
 	// 定义需要传输的文件
-	artifacts := []struct {
-		localPath  string
-		remotePath string
-		required   bool
-	}{
+	artifacts := []FileArtifact{
 		{"rke2-install.sh", "/tmp/rke2-artifacts/rke2-install.sh", true},
 		{"rke2.linux.tar.gz", "/tmp/rke2-artifacts/rke2.linux.tar.gz", true},
 		{"sha256sum*.txt", "/tmp/rke2-artifacts/sha256sum*.txt", true},
@@ -518,7 +522,7 @@ func (r *RKE2Installer) transferRKE2Artifacts(host config.Host) error {
 
 	// 传输每个文件
 	for _, artifact := range artifacts {
-		if err := r.transferFileWithProgress(host, artifact.localPath, artifact.remotePath); err != nil {
+		if err := r.transferArtifact(host, artifact); err != nil {
 			if artifact.required {
 				return fmt.Errorf("传输必需文件 %s 失败: %w", artifact.localPath, err)
 			}
@@ -534,6 +538,46 @@ func (r *RKE2Installer) transferRKE2Artifacts(host config.Host) error {
 	}
 
 	r.logger.Infof("主机 %s: RKE2离线资源文件传输完成", host.IP)
+	return nil
+}
+
+// transferArtifact 传输文件，支持通配符模式
+func (r *RKE2Installer) transferArtifact(host config.Host, artifact FileArtifact) error {
+	// 检查是否包含通配符
+	if strings.Contains(artifact.localPath, "*") {
+		return r.transferWildcardFiles(host, artifact.localPath, artifact.remotePath)
+	}
+	
+	// 普通文件传输
+	return r.transferFileWithProgress(host, artifact.localPath, artifact.remotePath)
+}
+
+// transferWildcardFiles 传输通配符匹配的文件
+func (r *RKE2Installer) transferWildcardFiles(host config.Host, localPattern, remotePattern string) error {
+	// 使用glob查找匹配的文件
+	matches, err := filepath.Glob(localPattern)
+	if err != nil {
+		return fmt.Errorf("通配符模式 %s 匹配失败: %w", localPattern, err)
+	}
+	
+	if len(matches) == 0 {
+		return fmt.Errorf("本地文件 %s 不存在", localPattern)
+	}
+	
+	// 传输每个匹配的文件
+	for _, localFile := range matches {
+		// 计算对应的远程文件名，直接使用文件名替换通配符
+		fileName := filepath.Base(localFile)
+		remoteDir := filepath.Dir(remotePattern)
+		remoteFile := filepath.Join(remoteDir, fileName)
+		
+		r.logger.Infof("主机 %s: 通配符匹配到文件: %s -> %s", host.IP, localFile, remoteFile)
+		
+		if err := r.transferFileWithProgress(host, localFile, remoteFile); err != nil {
+			return fmt.Errorf("传输文件 %s 失败: %w", localFile, err)
+		}
+	}
+	
 	return nil
 }
 
