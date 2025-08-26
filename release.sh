@@ -40,16 +40,14 @@ download_image() {
   done
 }
 
-download_image
 
 download_rke2() {
   wget -O rke2-images-linux.tar https://pkg.rainbond.com/rke2/v1.30.4+rke2r1/rke2-images-linux-$ARCH.tar
-  wget -O rke2.linux.tar.gz https://pkg.rainbond.com/rke2/v1.30.4+rke2r1/rke2.linux-$ARCH.tar.gz
+  wget -O rke2.linux-$ARCH.tar.gz https://pkg.rainbond.com/rke2/v1.30.4+rke2r1/rke2.linux-$ARCH.tar.gz
   wget -O sha256sum-$ARCH.txt https://pkg.rainbond.com/rke2/v1.30.4+rke2r1/sha256sum-$ARCH.txt
   wget -O rke2-install.sh https://rancher-mirror.rancher.cn/rke2/install.sh
 }
 
-download_rke2
 
 download_helm() {
   wget -O helm-linux.tar.gz https://mirrors.huaweicloud.com/helm/v3.18.6/helm-v3.18.6-linux-$ARCH.tar.gz
@@ -59,8 +57,6 @@ download_helm() {
   rm -rf linux-${ARCH} helm-linux.tar.gz
 }
 
-download_helm
-
 download_rainbond_chart() {
   ./helm repo add rainbond https://chart.rainbond.com
   ./helm repo update
@@ -68,18 +64,32 @@ download_rainbond_chart() {
   mv rainbond-*.tgz rainbond.tgz
 }
 
-download_rainbond_chart
-
+build_roi() {
 docker run --rm -v "$(pwd)":/workspace -w /workspace -e GOPROXY=https://goproxy.cn,direct -e GOSUMDB=sum.golang.google.cn \
   docker.cloud-sea.cloud/library/golang:1.20 \
   sh -c "go mod tidy && go build -o roi cmd/main.go"
 
-tar -zcvf roi.tar.gz \
-  roi \
-  rainbond.tgz \
-  rainbond-offline-images.tar \
-  rke2-images-linux.tar \
-  rke2.linux.tar.gz \
-  rke2-install.sh \
-  sha256sum-$ARCH.txt \
-  helm
+}
+
+
+main() {
+  build_roi
+  download_image
+  download_rke2
+  download_helm
+  download_rainbond_chart
+
+  mkdir roi-offline-package
+  mv roi roi-offline-package
+  mv rainbond.tgz roi-offline-package
+  mv rainbond-offline-images.tar roi-offline-package
+  mv rke2-images-linux.tar roi-offline-package
+  mv rke2.linux-$ARCH.tar.gz
+  mv rke2-install.sh roi-offline-package
+  mv sha256sum-$ARCH.txt roi-offline-package
+  mv helm roi-offline-package
+
+  tar -zcvf roi.tar.gz roi-offline-package
+}
+
+main
