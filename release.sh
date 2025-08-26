@@ -84,7 +84,7 @@ main() {
   mv rainbond.tgz roi-offline-package
   mv rainbond-offline-images.tar roi-offline-package
   mv rke2-images-linux.tar roi-offline-package
-  mv rke2.linux-$ARCH.tar.gz
+  mv rke2.linux-$ARCH.tar.gz roi-offline-package
   mv rke2-install.sh roi-offline-package
   mv sha256sum-$ARCH.txt roi-offline-package
   mv helm roi-offline-package
