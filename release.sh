@@ -45,7 +45,7 @@ download_image
 download_rke2() {
   wget -O rke2-images-linux.tar https://pkg.rainbond.com/rke2/v1.30.4+rke2r1/rke2-images-linux-$ARCH.tar
   wget -O rke2.linux.tar.gz https://pkg.rainbond.com/rke2/v1.30.4+rke2r1/rke2.linux-$ARCH.tar.gz
-  wget -O sha256sum.txt https://pkg.rainbond.com/rke2/v1.30.4+rke2r1/sha256sum-$ARCH.txt
+  wget -O sha256sum-$ARCH.txt https://pkg.rainbond.com/rke2/v1.30.4+rke2r1/sha256sum-$ARCH.txt
   wget -O rke2-install.sh https://rancher-mirror.rancher.cn/rke2/install.sh
 }
 
@@ -70,8 +70,9 @@ download_rainbond_chart() {
 
 download_rainbond_chart
 
-docker run --rm -v "$(pwd)":/workspace -w /workspace -e GOPROXY=https://goproxy.cn,direct -e GOSUMDB=sum.golang.google.cn
-  golang:1.20 sh -c "go mod tidy && go build -o roi cmd/main.go"
+docker run --rm -v "$(pwd)":/workspace -w /workspace -e GOPROXY=https://goproxy.cn,direct -e GOSUMDB=sum.golang.google.cn \
+  docker.cloud-sea.cloud/library/golang:1.20 \
+  sh -c "go mod tidy && go build -o roi cmd/main.go"
 
 tar -zcvf roi.tar.gz \
   roi \
@@ -80,5 +81,5 @@ tar -zcvf roi.tar.gz \
   rke2-images-linux.tar \
   rke2.linux.tar.gz \
   rke2-install.sh \
-  sha256sum.txt \
+  sha256sum-$ARCH.txt \
   helm

@@ -14,14 +14,15 @@
 # - node-external-ip: 使用ip（仅当ip和internal_ip不同时才配置）
 hosts:
   # 第一个节点：etcd节点（必须包含etcd）
-  - ip: 14.103.217.150
-    internal_ip: 10.10.151.253
-    node_name: rainbond-master-1
+  - ip: 10.10.152.0
+    internal_ip: 10.10.152.0
+    # node_name: rainbond-master-1
     user: root
     ssh_key: ~/.ssh/id_rsa
     role: 
       - master
       - etcd
+      - worker
     mysql_master: true
     # lvm_config:
     #   pv_devices: ["/dev/sdb", "/dev/sdc"]
@@ -34,22 +35,25 @@ hosts:
     #     size: 4G
     #     mount_point: /opt/rainbond
 
-  - ip: 14.103.217.78
-    internal_ip: 10.10.151.252
-    node_name: rainbond-etcd-2
+  - ip: 10.10.152.1
+    internal_ip: 10.10.152.1
+    # node_name: rainbond-etcd-2
     user: root
     ssh_key: ~/.ssh/id_rsa
     role: 
       - master
       - etcd
+      - worker
     mysql_slave: true
   
-  - ip: 14.103.217.175
-    internal_ip: 10.10.151.254
-    node_name: rainbond-worker-1
+  - ip: 10.10.152.2
+    internal_ip: 10.10.152.2
+    # node_name: rainbond-worker-1
     user: root
     ssh_key: ~/.ssh/id_rsa
     role: 
+      - master
+      - etcd
       - worker
     
 
@@ -66,13 +70,13 @@ rainbond:
   namespace: "rbd-system"
   values:
     Cluster:
-      gatewayIngressIPs: 14.103.217.150
+      gatewayIngressIPs: 10.10.152.0
       nodesForGateway:
-      - externalIP: 14.103.217.150
-        internalIP: 10.10.151.253
-        name: rainbond-master-1
+      - externalIP: 10.10.152.0
+        internalIP: 10.10.152.0
+        name: 10.10.152.0
       nodesForChaos:
-      - name: rainbond-master-1
+      - name: 10.10.152.0
       containerdRuntimePath: /var/run/k3s/containerd
     Component:
       rbd_app_ui:
