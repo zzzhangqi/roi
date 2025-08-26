@@ -581,6 +581,124 @@ func (r *RKE2Installer) transferWildcardFiles(host config.Host, localPattern, re
 	return nil
 }
 
+// addLocalFileInfos 添加本地文件信息，支持通配符
+func (r *RKE2Installer) addLocalFileInfos(artifact FileArtifact, fileInfos map[string]*FileInfo) error {
+	// 检查是否包含通配符
+	if strings.Contains(artifact.localPath, "*") {
+		// 处理通配符模式
+		matches, err := filepath.Glob(artifact.localPath)
+		if err != nil {
+			return fmt.Errorf("通配符模式 %s 匹配失败: %w", artifact.localPath, err)
+		}
+		
+		if len(matches) == 0 {
+			return fmt.Errorf("本地文件 %s 不存在", artifact.localPath)
+		}
+		
+		// 为每个匹配的文件添加信息
+		for _, localFile := range matches {
+			info, err := r.getLocalFileInfo(localFile)
+			if err != nil {
+				return fmt.Errorf("获取文件 %s 信息失败: %w", localFile, err)
+			}
+			
+			// 使用实际文件名作为key
+			fileName := filepath.Base(localFile)
+			remoteDir := filepath.Dir(artifact.remotePath)
+			remoteFile := filepath.Join(remoteDir, fileName)
+			fileInfos[remoteFile] = info
+		}
+		
+		return nil
+	}
+	
+	// 普通文件处理
+	info, err := r.getLocalFileInfo(artifact.localPath)
+	if err != nil {
+		return err
+	}
+	
+	fileInfos[artifact.remotePath] = info
+	return nil
+}
+
+// validateFilesOnHost 验证单个主机上的文件完整性
+func (r *RKE2Installer) validateFilesOnHost(host config.Host, artifacts []FileArtifact, localFileInfos map[string]*FileInfo) error {
+	for _, artifact := range artifacts {
+		if !artifact.required {
+			continue
+		}
+
+		if strings.Contains(artifact.localPath, "*") {
+			// 处理通配符文件验证
+			if err := r.validateWildcardFiles(host, artifact, localFileInfos); err != nil {
+				return err
+			}
+		} else {
+			// 处理普通文件验证
+			localInfo := localFileInfos[artifact.remotePath]
+			if localInfo == nil {
+				return fmt.Errorf("未找到本地文件 %s 的信息", artifact.localPath)
+			}
+
+			remoteInfo, err := r.getRemoteFileInfo(host, artifact.remotePath)
+			if err != nil {
+				return fmt.Errorf("获取远程文件 %s 信息失败: %w", artifact.remotePath, err)
+			}
+
+			// 验证文件大小和MD5
+			if remoteInfo.size != localInfo.size || remoteInfo.md5 != localInfo.md5 {
+				return fmt.Errorf("文件 %s 校验失败: 预期大小=%d MD5=%s, 实际大小=%d MD5=%s",
+					artifact.remotePath, localInfo.size, localInfo.md5, remoteInfo.size, remoteInfo.md5)
+			}
+
+			r.logger.Debugf("节点 %s: 文件 %s 校验通过", host.IP, artifact.remotePath)
+		}
+	}
+	
+	return nil
+}
+
+// validateWildcardFiles 验证通配符文件
+func (r *RKE2Installer) validateWildcardFiles(host config.Host, artifact FileArtifact, localFileInfos map[string]*FileInfo) error {
+	// 查找所有匹配的本地文件
+	matches, err := filepath.Glob(artifact.localPath)
+	if err != nil {
+		return fmt.Errorf("通配符模式 %s 匹配失败: %w", artifact.localPath, err)
+	}
+	
+	if len(matches) == 0 {
+		return fmt.Errorf("本地文件 %s 不存在", artifact.localPath)
+	}
+	
+	// 验证每个匹配的文件
+	for _, localFile := range matches {
+		fileName := filepath.Base(localFile)
+		remoteDir := filepath.Dir(artifact.remotePath)
+		remoteFile := filepath.Join(remoteDir, fileName)
+		
+		localInfo := localFileInfos[remoteFile]
+		if localInfo == nil {
+			return fmt.Errorf("未找到本地文件 %s 的信息", localFile)
+		}
+
+		remoteInfo, err := r.getRemoteFileInfo(host, remoteFile)
+		if err != nil {
+			return fmt.Errorf("获取远程文件 %s 信息失败: %w", remoteFile, err)
+		}
+
+		// 验证文件大小和MD5
+		if remoteInfo.size != localInfo.size || remoteInfo.md5 != localInfo.md5 {
+			return fmt.Errorf("文件 %s 校验失败: 预期大小=%d MD5=%s, 实际大小=%d MD5=%s",
+				remoteFile, localInfo.size, localInfo.md5, remoteInfo.size, remoteInfo.md5)
+		}
+
+		r.logger.Debugf("节点 %s: 文件 %s 校验通过", host.IP, remoteFile)
+	}
+	
+	return nil
+}
+
 // transferFileWithProgress 智能传输文件，支持完整性校验和断点续传
 func (r *RKE2Installer) transferFileWithProgress(host config.Host, localPath, remotePath string) error {
 	r.logger.Infof("主机 %s: 开始传输 %s -> %s", host.IP, localPath, remotePath)
@@ -1597,11 +1715,7 @@ func (r *RKE2Installer) validatePackageIntegrityOnAllNodes() error {
 	r.logger.Infof("开始验证 %d 个节点的安装包完整性", len(r.config.Hosts))
 
 	// 定义需要验证的文件
-	filesToValidate := []struct {
-		localPath  string
-		remotePath string
-		required   bool
-	}{
+	filesToValidate := []FileArtifact{
 		{"rke2-install.sh", "/tmp/rke2-artifacts/rke2-install.sh", true},
 		{"rke2.linux.tar.gz", "/tmp/rke2-artifacts/rke2.linux.tar.gz", true},
 		{"sha256sum*.txt", "/tmp/rke2-artifacts/sha256sum*.txt", true},
@@ -1613,11 +1727,9 @@ func (r *RKE2Installer) validatePackageIntegrityOnAllNodes() error {
 	localFileInfos := make(map[string]*FileInfo)
 	for _, file := range filesToValidate {
 		if file.required {
-			info, err := r.getLocalFileInfo(file.localPath)
-			if err != nil {
+			if err := r.addLocalFileInfos(file, localFileInfos); err != nil {
 				return fmt.Errorf("获取本地文件 %s 信息失败: %w", file.localPath, err)
 			}
-			localFileInfos[file.localPath] = info
 		}
 	}
 
@@ -1626,24 +1738,8 @@ func (r *RKE2Installer) validatePackageIntegrityOnAllNodes() error {
 		r.logger.Infof("=== 验证节点 %d/%d: %s ===", i+1, len(r.config.Hosts), host.IP)
 		r.logger.Infof("开始验证节点 %s 的安装包完整性", host.IP)
 
-		for _, file := range filesToValidate {
-			if !file.required {
-				continue
-			}
-
-			localInfo := localFileInfos[file.localPath]
-			remoteInfo, err := r.getRemoteFileInfo(host, file.remotePath)
-			if err != nil {
-				return fmt.Errorf("节点 %s 获取远程文件 %s 信息失败: %w", host.IP, file.remotePath, err)
-			}
-
-			// 验证文件大小和MD5
-			if remoteInfo.size != localInfo.size || remoteInfo.md5 != localInfo.md5 {
-				return fmt.Errorf("节点 %s 文件 %s 校验失败: 预期大小=%d MD5=%s, 实际大小=%d MD5=%s",
-					host.IP, file.remotePath, localInfo.size, localInfo.md5, remoteInfo.size, remoteInfo.md5)
-			}
-
-			r.logger.Debugf("节点 %s: 文件 %s 校验通过", host.IP, file.remotePath)
+		if err := r.validateFilesOnHost(host, filesToValidate, localFileInfos); err != nil {
+			return fmt.Errorf("节点 %s 验证失败: %w", host.IP, err)
 		}
 
 		r.logger.Infof("节点 %s: 安装包完整性验证通过", host.IP)
