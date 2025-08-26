@@ -547,7 +547,7 @@ func (r *RKE2Installer) transferArtifact(host config.Host, artifact FileArtifact
 	if strings.Contains(artifact.localPath, "*") {
 		return r.transferWildcardFiles(host, artifact.localPath, artifact.remotePath)
 	}
-	
+
 	// 普通文件传输
 	return r.transferFileWithProgress(host, artifact.localPath, artifact.remotePath)
 }
@@ -559,25 +559,25 @@ func (r *RKE2Installer) transferWildcardFiles(host config.Host, localPattern, re
 	if err != nil {
 		return fmt.Errorf("通配符模式 %s 匹配失败: %w", localPattern, err)
 	}
-	
+
 	if len(matches) == 0 {
 		return fmt.Errorf("本地文件 %s 不存在", localPattern)
 	}
-	
+
 	// 传输每个匹配的文件
 	for _, localFile := range matches {
 		// 计算对应的远程文件名，直接使用文件名替换通配符
 		fileName := filepath.Base(localFile)
 		remoteDir := filepath.Dir(remotePattern)
 		remoteFile := filepath.Join(remoteDir, fileName)
-		
+
 		r.logger.Infof("主机 %s: 通配符匹配到文件: %s -> %s", host.IP, localFile, remoteFile)
-		
+
 		if err := r.transferFileWithProgress(host, localFile, remoteFile); err != nil {
 			return fmt.Errorf("传输文件 %s 失败: %w", localFile, err)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -590,34 +590,34 @@ func (r *RKE2Installer) addLocalFileInfos(artifact FileArtifact, fileInfos map[s
 		if err != nil {
 			return fmt.Errorf("通配符模式 %s 匹配失败: %w", artifact.localPath, err)
 		}
-		
+
 		if len(matches) == 0 {
 			return fmt.Errorf("本地文件 %s 不存在", artifact.localPath)
 		}
-		
+
 		// 为每个匹配的文件添加信息
 		for _, localFile := range matches {
 			info, err := r.getLocalFileInfo(localFile)
 			if err != nil {
-				return fmt.Errorf("获取文件 %s 信息失败: %w", localFile, err)
+				return fmt.Errorf("处理通配符文件 %s (匹配 %s): %w", localFile, artifact.localPath, err)
 			}
-			
+
 			// 使用实际文件名作为key
 			fileName := filepath.Base(localFile)
 			remoteDir := filepath.Dir(artifact.remotePath)
 			remoteFile := filepath.Join(remoteDir, fileName)
 			fileInfos[remoteFile] = info
 		}
-		
+
 		return nil
 	}
-	
+
 	// 普通文件处理
 	info, err := r.getLocalFileInfo(artifact.localPath)
 	if err != nil {
 		return err
 	}
-	
+
 	fileInfos[artifact.remotePath] = info
 	return nil
 }
@@ -655,7 +655,7 @@ func (r *RKE2Installer) validateFilesOnHost(host config.Host, artifacts []FileAr
 			r.logger.Debugf("节点 %s: 文件 %s 校验通过", host.IP, artifact.remotePath)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -666,17 +666,17 @@ func (r *RKE2Installer) validateWildcardFiles(host config.Host, artifact FileArt
 	if err != nil {
 		return fmt.Errorf("通配符模式 %s 匹配失败: %w", artifact.localPath, err)
 	}
-	
+
 	if len(matches) == 0 {
 		return fmt.Errorf("本地文件 %s 不存在", artifact.localPath)
 	}
-	
+
 	// 验证每个匹配的文件
 	for _, localFile := range matches {
 		fileName := filepath.Base(localFile)
 		remoteDir := filepath.Dir(artifact.remotePath)
 		remoteFile := filepath.Join(remoteDir, fileName)
-		
+
 		localInfo := localFileInfos[remoteFile]
 		if localInfo == nil {
 			return fmt.Errorf("未找到本地文件 %s 的信息", localFile)
@@ -695,7 +695,7 @@ func (r *RKE2Installer) validateWildcardFiles(host config.Host, artifact FileArt
 
 		r.logger.Debugf("节点 %s: 文件 %s 校验通过", host.IP, remoteFile)
 	}
-	
+
 	return nil
 }
 
@@ -833,6 +833,14 @@ type FileInfo struct {
 
 // getLocalFileInfo 获取本地文件信息
 func (r *RKE2Installer) getLocalFileInfo(filePath string) (*FileInfo, error) {
+	// 先检查文件是否存在
+	if _, err := os.Stat(filePath); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("本地文件 %s 不存在", filePath)
+		}
+		return nil, fmt.Errorf("访问本地文件 %s 失败: %w", filePath, err)
+	}
+
 	// 获取文件大小 - 兼容Linux和macOS
 	var sizeInt int64
 	var sizeHuman string
@@ -845,7 +853,7 @@ func (r *RKE2Installer) getLocalFileInfo(filePath string) (*FileInfo, error) {
 		statCmd = exec.Command("stat", "-f", "%z", filePath)
 		sizeOutput, err = statCmd.Output()
 		if err != nil {
-			return nil, fmt.Errorf("获取文件大小失败: %w", err)
+			return nil, fmt.Errorf("获取文件大小失败 (Linux和macOS stat都失败): %w", err)
 		}
 	}
 
