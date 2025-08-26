@@ -11,31 +11,32 @@ else
 fi
 
 download_image() {
+  image_list=(
+    "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rainbond:${VERSION}"
+    "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-chaos:${VERSION}"
+    "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-mq:${VERSION}"
+    "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rainbond-operator:${VERSION}"
+    "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-worker:${VERSION}"
+    "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-api:${VERSION}"
+    "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-init-probe:${VERSION}"
+    "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-monitor:v2.20.0"
+    "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/apisix-ingress-controller:v1.8.3"
+    "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/apisix:3.9.1-debian"
+    "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/local-path-provisioner:v0.0.30"
+    "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/minio:RELEASE.2023-10-24T04-42-36Z"
+    "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-db:8.0.19"
+    "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/registry:2.6.2"
+    "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/alpine:latest"
+  )
 
-image_list="${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rainbond:${VERSION}
-${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-chaos:${VERSION}
-${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-mq:${VERSION}
-${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rainbond-operator:${VERSION}
-${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-worker:${VERSION}
-${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-api:${VERSION}
-${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-init-probe:${VERSION}
-${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-monitor:v2.20.0
-${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/apisix-ingress-controller:v1.8.3
-${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/apisix:3.9.1-debian
-${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/local-path-provisioner:v0.0.30
-${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/minio:RELEASE.2023-10-24T04-42-36Z
-${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-db:8.0.19
-${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/registry:2.6.2
-${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/alpine:latest"
-
-  for image in ${image_list}; do
-      docker pull "${image}"
+  for image in "${image_list[@]}"; do
+    docker pull "${image}"
   done
 
-  docker save -o rainbond-offline-images.tar "${image_list}"
+  docker save -o rainbond-offline-images.tar "${image_list[@]}"
 
-  for image in ${image_list}; do
-      docker rmi -f "${image}"
+  for image in "${image_list[@]}"; do
+    docker rmi -f "${image}"
   done
 }
 
@@ -69,9 +70,8 @@ download_rainbond_chart() {
 
 download_rainbond_chart
 
-docker run --rm -v $(pwd):/workspace -w /workspace -e GOPROXY=https://goproxy.cn,direct golang:1.20 \
-  sh -c "go mod download && go mod tidy && go build -o roi cmd/main.go"
-
+docker run --rm -v "$(pwd)":/workspace -w /workspace -e GOPROXY=https://goproxy.cn,direct -e GOSUMDB=sum.golang.google.cn
+  golang:1.20 sh -c "go mod tidy && go build -o roi cmd/main.go"
 
 tar -zcvf roi.tar.gz \
   roi \
