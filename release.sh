@@ -11,21 +11,22 @@ else
 fi
 
 download_image() {
-  image_list="${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rainbond:${VERSION}
-  ${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-chaos:${VERSION}
-  ${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-mq:${VERSION}
-  ${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rainbond-operator:${VERSION}
-  ${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-worker:${VERSION}
-  ${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-api:${VERSION}
-  ${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-init-probe:${VERSION}
-  ${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-monitor:v2.20.0
-  ${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/apisix-ingress-controller:v1.8.3
-  ${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/apisix:3.9.1-debian
-  ${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/local-path-provisioner:v0.0.30
-  ${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/minio:RELEASE.2023-10-24T04-42-36Z
-  ${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-db:8.0.19
-  ${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/registry:2.6.2
-  ${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/alpine:latest"
+
+image_list="${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rainbond:${VERSION}
+${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-chaos:${VERSION}
+${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-mq:${VERSION}
+${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rainbond-operator:${VERSION}
+${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-worker:${VERSION}
+${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-api:${VERSION}
+${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-init-probe:${VERSION}
+${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-monitor:v2.20.0
+${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/apisix-ingress-controller:v1.8.3
+${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/apisix:3.9.1-debian
+${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/local-path-provisioner:v0.0.30
+${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/minio:RELEASE.2023-10-24T04-42-36Z
+${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-db:8.0.19
+${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/registry:2.6.2
+${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/alpine:latest"
 
   for image in ${image_list}; do
       docker pull "${image}"
@@ -50,7 +51,7 @@ download_rke2() {
 download_rke2
 
 download_helm() {
-  wget -O helm-linux.tar.gz https://get.helm.sh/helm-v3.18.6-linux-$ARCH.tar.gz
+  wget -O helm-linux.tar.gz https://mirrors.huaweicloud.com/helm/v3.18.6/helm-v3.18.6-linux-$ARCH.tar.gz
   tar -zxvf helm-linux.tar.gz
   mv linux-${ARCH}/helm .
   chmod +x helm
