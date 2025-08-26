@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build:*)",
+      "Bash(./roi install:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

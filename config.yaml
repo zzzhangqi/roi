@@ -1,0 +1,82 @@
+# Rainbond离线安装配置文件示例
+# 支持完整的集群部署：系统检查、LVM配置、RKE2安装、系统优化、Rainbond安装
+
+# 主机列表
+# 节点配置说明：
+# - ip: 外网IP，必填，用于SSH连接
+# - internal_ip: 内网IP，必填，用于Pod通信（RKE2的node-ip）
+#   注意：没有外网IP的情况下，ip和internal_ip填写相同的内网IP
+# - node_name: 节点名称，可选，如果不提供将自动使用ip字段作为节点名称
+# - role: 节点角色，支持 master、etcd、worker
+#
+# RKE2配置映射：
+# - node-ip: 使用internal_ip
+# - node-external-ip: 使用ip（仅当ip和internal_ip不同时才配置）
+hosts:
+  # 第一个节点：etcd节点（必须包含etcd）
+  - ip: 14.103.217.150
+    internal_ip: 10.10.151.253
+    node_name: rainbond-master-1
+    user: root
+    ssh_key: ~/.ssh/id_rsa
+    role: 
+      - master
+      - etcd
+    mysql_master: true
+    # lvm_config:
+    #   pv_devices: ["/dev/sdb", "/dev/sdc"]
+    #   vg_name: vg_rbd
+    #   lvs:
+    #   - lv_name: rke
+    #     size: 5G
+    #     mount_point: /var/lib/rancher/rke2
+    #   - lv_name: rbd
+    #     size: 4G
+    #     mount_point: /opt/rainbond
+
+  - ip: 14.103.217.78
+    internal_ip: 10.10.151.252
+    node_name: rainbond-etcd-2
+    user: root
+    ssh_key: ~/.ssh/id_rsa
+    role: 
+      - master
+      - etcd
+    mysql_slave: true
+  
+  - ip: 14.103.217.175
+    internal_ip: 10.10.151.254
+    node_name: rainbond-worker-1
+    user: root
+    ssh_key: ~/.ssh/id_rsa
+    role: 
+      - worker
+    
+
+# MySQL 主从集群配置
+mysql:
+  enabled: true                             # 启用MySQL部署
+  root_password: "Root123456"               # MySQL root密码
+  repl_user: "repl_user"                   # 复制用户名
+  repl_password: "repl_password"           # 复制密码
+  data_path: "/opt/rainbond/mysql"         # 数据存储路径
+
+# Rainbond 配置
+rainbond:
+  namespace: "rbd-system"
+  values:
+    Cluster:
+      gatewayIngressIPs: 14.103.217.150
+      nodesForGateway:
+      - externalIP: 14.103.217.150
+        internalIP: 10.10.151.253
+        name: rainbond-master-1
+      nodesForChaos:
+      - name: rainbond-master-1
+      containerdRuntimePath: /var/run/k3s/containerd
+    Component:
+      rbd_app_ui:
+        env:
+        - name: DISABLE_DEFAULT_APP_MARKET
+          value: "true"
+    
