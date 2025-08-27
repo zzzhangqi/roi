@@ -1569,7 +1569,12 @@ func (r *RKE2Installer) waitForNodeReady(host config.Host) error {
 			fi
 			
 			# 检查是否有Ready节点
-			ready_count=$(/usr/local/bin/kubectl get nodes --no-headers 2>/dev/null | grep -c " Ready " || echo "0")
+			ready_count=$(/usr/local/bin/kubectl get nodes --no-headers 2>/dev/null | grep -c " Ready " 2>/dev/null || echo "0")
+			
+			# 确保ready_count是一个有效数字
+			case "$ready_count" in
+				''|*[!0-9]*) ready_count=0 ;;
+			esac
 			
 			if [ "$ready_count" -gt 0 ]; then
 				echo "发现 $ready_count 个Ready节点!"

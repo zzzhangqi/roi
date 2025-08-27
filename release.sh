@@ -27,6 +27,7 @@ download_image() {
     "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-db:8.0.19"
     "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/registry:2.6.2"
     "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/alpine:latest"
+    "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/mysql:8.0.34-bitnami"
   )
 
   for image in "${image_list[@]}"; do
