@@ -2,21 +2,33 @@ package logger
 
 import (
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"time"
 )
 
+type LogLevel int
+
+const (
+	DEBUG LogLevel = iota
+	INFO
+	WARN
+	ERROR
+)
+
 type Logger struct {
-	infoLogger    *log.Logger
-	errorLogger   *log.Logger
-	debugLogger   *log.Logger
-	logFile       *os.File
-	consoleOutput bool
+	fileLogger      *log.Logger
+	consoleLogger   *log.Logger
+	logFile         *os.File
+	consoleLevel    LogLevel // 控制台输出级别
+	fileLevel       LogLevel // 文件输出级别
+	suppressConsole bool     // 是否抑制控制台输出（进度条模式）
 }
 
-func NewLogger(consoleOutput bool) (*Logger, error) {
+// NewLogger 创建新的日志记录器
+// consoleLevel: 控制台输出级别 (ERROR表示只显示错误，INFO表示显示所有)
+// fileLevel: 文件输出级别 (通常为DEBUG，记录所有详细信息)
+func NewLogger(consoleLevel, fileLevel LogLevel) (*Logger, error) {
 	// 创建日志文件名（按日期-小时分钟命名）
 	now := time.Now()
 	logFileName := fmt.Sprintf("roi-install-%s.log", now.Format("2006-01-02-15-04"))
@@ -27,37 +39,78 @@ func NewLogger(consoleOutput bool) (*Logger, error) {
 		return nil, fmt.Errorf("无法创建日志文件: %w", err)
 	}
 
-	var writers []io.Writer
-	writers = append(writers, logFile)
-	
-	if consoleOutput {
-		writers = append(writers, os.Stdout)
-	}
-
-	multiWriter := io.MultiWriter(writers...)
-
 	logger := &Logger{
-		infoLogger:    log.New(multiWriter, "[INFO] ", log.LstdFlags),
-		errorLogger:   log.New(multiWriter, "[ERROR] ", log.LstdFlags),
-		debugLogger:   log.New(multiWriter, "[DEBUG] ", log.LstdFlags),
-		logFile:       logFile,
-		consoleOutput: consoleOutput,
+		fileLogger:      log.New(logFile, "", log.LstdFlags),
+		consoleLogger:   log.New(os.Stdout, "", log.LstdFlags),
+		logFile:         logFile,
+		consoleLevel:    consoleLevel,
+		fileLevel:       fileLevel,
+		suppressConsole: false,
 	}
 
-	logger.Info("日志记录已启动，详细日志保存到: %s", logFileName)
+	// 只在文件中记录启动信息
+	logger.fileLogger.Printf("[INFO] 日志记录已启动，详细日志保存到: %s", logFileName)
 	return logger, nil
 }
 
-func (l *Logger) Info(format string, v ...interface{}) {
-	l.infoLogger.Printf(format, v...)
+// NewProgressLogger 创建适用于进度显示的日志记录器
+// 控制台只显示ERROR级别，所有详细信息记录到文件
+func NewProgressLogger() (*Logger, error) {
+	return NewLogger(ERROR, DEBUG)
 }
 
-func (l *Logger) Error(format string, v ...interface{}) {
-	l.errorLogger.Printf(format, v...)
+// SuppressConsole 抑制控制台输出（进度条模式）
+func (l *Logger) SuppressConsole() {
+	l.suppressConsole = true
+}
+
+// EnableConsole 启用控制台输出
+func (l *Logger) EnableConsole() {
+	l.suppressConsole = false
+}
+
+func (l *Logger) log(level LogLevel, levelName string, format string, v ...interface{}) {
+	message := fmt.Sprintf(format, v...)
+	
+	// 始终写入文件（如果级别足够）
+	if level >= l.fileLevel {
+		l.fileLogger.Printf("[%s] %s", levelName, message)
+	}
+	
+	// 根据设置决定是否写入控制台
+	if !l.suppressConsole && level >= l.consoleLevel {
+		l.consoleLogger.Printf("[%s] %s", levelName, message)
+	}
 }
 
 func (l *Logger) Debug(format string, v ...interface{}) {
-	l.debugLogger.Printf(format, v...)
+	l.log(DEBUG, "DEBUG", format, v...)
+}
+
+func (l *Logger) Info(format string, v ...interface{}) {
+	l.log(INFO, "INFO", format, v...)
+}
+
+func (l *Logger) Warn(format string, v ...interface{}) {
+	l.log(WARN, "WARN", format, v...)
+}
+
+func (l *Logger) Error(format string, v ...interface{}) {
+	l.log(ERROR, "ERROR", format, v...)
+}
+
+// InfoToFileOnly 只输出到文件的信息日志
+func (l *Logger) InfoToFileOnly(format string, v ...interface{}) {
+	message := fmt.Sprintf(format, v...)
+	l.fileLogger.Printf("[INFO] %s", message)
+}
+
+// InfoToConsoleOnly 只输出到控制台的信息日志（用于进度显示）
+func (l *Logger) InfoToConsoleOnly(format string, v ...interface{}) {
+	if !l.suppressConsole {
+		message := fmt.Sprintf(format, v...)
+		l.consoleLogger.Printf("[INFO] %s", message)
+	}
 }
 
 func (l *Logger) Close() error {

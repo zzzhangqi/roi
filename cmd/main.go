@@ -113,15 +113,15 @@ var installCmd = &cobra.Command{
 		}
 
 		// Default: full installation - execute all stages in order
-		// 初始化日志记录器，详细日志记录到文件，控制台只显示进度
-		appLogger, err := logger.NewLogger(false) // false表示不在控制台输出详细日志
+		// 初始化日志记录器，详细日志记录到文件，控制台只显示进度和错误
+		appLogger, err := logger.NewProgressLogger() // 控制台只显示ERROR，文件记录所有DEBUG信息
 		if err != nil {
 			return fmt.Errorf("初始化日志记录器失败: %w", err)
 		}
 		defer appLogger.Close()
 
-		// 初始化步骤进度显示器
-		stepProgress := progress.NewStepProgress(6)
+		// 初始化步骤进度显示器，集成logger
+		stepProgress := progress.NewStepProgressWithLogger(6, appLogger)
 
 		// 阶段1: 系统检查
 		stepProgress.StartStep("系统检查")
@@ -189,6 +189,9 @@ var installCmd = &cobra.Command{
 		stepProgress.CompleteStep()
 		appLogger.Info("Rainbond安装阶段完成")
 
+		// 完成所有步骤，重新启用控制台输出
+		stepProgress.Finish()
+		
 		fmt.Println("\n🎉 所有安装步骤已完成！")
 		return nil
 	},
