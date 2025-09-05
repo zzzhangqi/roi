@@ -13,6 +13,8 @@ import (
 	"github.com/rainbond/rainbond-offline-installer/internal/rainbond"
 	"github.com/rainbond/rainbond-offline-installer/internal/rke2"
 	"github.com/rainbond/rainbond-offline-installer/pkg/config"
+	"github.com/rainbond/rainbond-offline-installer/pkg/logger"
+	"github.com/rainbond/rainbond-offline-installer/pkg/progress"
 )
 
 var (
@@ -111,36 +113,83 @@ var installCmd = &cobra.Command{
 		}
 
 		// Default: full installation - execute all stages in order
+		// 初始化日志记录器，详细日志记录到文件，控制台只显示进度
+		appLogger, err := logger.NewLogger(false) // false表示不在控制台输出详细日志
+		if err != nil {
+			return fmt.Errorf("初始化日志记录器失败: %w", err)
+		}
+		defer appLogger.Close()
+
+		// 初始化步骤进度显示器
+		stepProgress := progress.NewStepProgress(6)
+
 		// 阶段1: 系统检查
-		if err := runCheck(cfg); err != nil {
+		stepProgress.StartStep("系统检查")
+		appLogger.Info("开始系统检查阶段")
+		if err := runCheckWithLogger(cfg, appLogger, stepProgress); err != nil {
+			appLogger.Error("系统检查阶段失败: %v", err)
+			stepProgress.FailStep(err.Error())
 			return fmt.Errorf("系统检查阶段失败: %w", err)
 		}
+		stepProgress.CompleteStep()
+		appLogger.Info("系统检查阶段完成")
 
 		// 阶段2: LVM配置
-		if err := runLVM(cfg); err != nil {
+		stepProgress.StartStep("LVM配置")
+		appLogger.Info("开始LVM配置阶段")
+		if err := runLVMWithLogger(cfg, appLogger, stepProgress); err != nil {
+			appLogger.Error("LVM配置阶段失败: %v", err)
+			stepProgress.FailStep(err.Error())
 			return fmt.Errorf("LVM配置阶段失败: %w", err)
 		}
+		stepProgress.CompleteStep()
+		appLogger.Info("LVM配置阶段完成")
 
 		// 阶段3: 系统优化
-		if err := runOptimize(cfg); err != nil {
+		stepProgress.StartStep("系统优化")
+		appLogger.Info("开始系统优化阶段")
+		if err := runOptimizeWithLogger(cfg, appLogger, stepProgress); err != nil {
+			appLogger.Error("系统优化阶段失败: %v", err)
+			stepProgress.FailStep(err.Error())
 			return fmt.Errorf("系统优化阶段失败: %w", err)
 		}
+		stepProgress.CompleteStep()
+		appLogger.Info("系统优化阶段完成")
 
 		// 阶段4: RKE2安装
-		if err := runRKE2(cfg); err != nil {
+		stepProgress.StartStep("RKE2安装")
+		appLogger.Info("开始RKE2安装阶段")
+		if err := runRKE2WithLogger(cfg, appLogger, stepProgress); err != nil {
+			appLogger.Error("RKE2安装阶段失败: %v", err)
+			stepProgress.FailStep(err.Error())
 			return fmt.Errorf("RKE2安装阶段失败: %w", err)
 		}
+		stepProgress.CompleteStep()
+		appLogger.Info("RKE2安装阶段完成")
 
 		// 阶段5: MySQL安装
-		if err := runMySQL(cfg); err != nil {
+		stepProgress.StartStep("MySQL安装")
+		appLogger.Info("开始MySQL安装阶段")
+		if err := runMySQLWithLogger(cfg, appLogger, stepProgress); err != nil {
+			appLogger.Error("MySQL安装阶段失败: %v", err)
+			stepProgress.FailStep(err.Error())
 			return fmt.Errorf("MySQL安装阶段失败: %w", err)
 		}
+		stepProgress.CompleteStep()
+		appLogger.Info("MySQL安装阶段完成")
 
 		// 阶段6: Rainbond安装
-		if err := runRainbond(cfg); err != nil {
+		stepProgress.StartStep("Rainbond安装")
+		appLogger.Info("开始Rainbond安装阶段")
+		if err := runRainbondWithLogger(cfg, appLogger, stepProgress); err != nil {
+			appLogger.Error("Rainbond安装阶段失败: %v", err)
+			stepProgress.FailStep(err.Error())
 			return fmt.Errorf("Rainbond安装阶段失败: %w", err)
 		}
+		stepProgress.CompleteStep()
+		appLogger.Info("Rainbond安装阶段完成")
 
+		fmt.Println("\n🎉 所有安装步骤已完成！")
 		return nil
 	},
 }
@@ -171,6 +220,49 @@ func runMySQL(cfg *config.Config) error {
 }
 
 func runRainbond(cfg *config.Config) error {
+	rainbondInstaller := rainbond.NewRainbondInstaller(cfg)
+	return rainbondInstaller.Run()
+}
+
+// 带有日志记录器的运行函数
+func runCheckWithLogger(cfg *config.Config, logger *logger.Logger, stepProgress *progress.StepProgress) error {
+	logger.Info("系统检查: 开始环境检测")
+	stepProgress.UpdateStepProgress("检测系统环境...")
+	checker := check.NewBasicChecker(cfg)
+	return checker.Run()
+}
+
+func runLVMWithLogger(cfg *config.Config, logger *logger.Logger, stepProgress *progress.StepProgress) error {
+	logger.Info("LVM配置: 检查并配置逻辑卷管理")
+	stepProgress.UpdateStepProgress("配置LVM逻辑卷...")
+	lvmManager := lvm.NewLVM(cfg)
+	return lvmManager.ShowAndCreate()
+}
+
+func runRKE2WithLogger(cfg *config.Config, logger *logger.Logger, stepProgress *progress.StepProgress) error {
+	logger.Info("RKE2安装: 开始Kubernetes集群部署")
+	stepProgress.UpdateStepProgress("安装RKE2 Kubernetes集群...")
+	rke2Installer := rke2.NewRKE2Installer(cfg)
+	return rke2Installer.Run()
+}
+
+func runOptimizeWithLogger(cfg *config.Config, logger *logger.Logger, stepProgress *progress.StepProgress) error {
+	logger.Info("系统优化: 优化容器环境配置")
+	stepProgress.UpdateStepProgress("优化系统配置...")
+	optimizer := optimize.NewSystemOptimizer(cfg)
+	return optimizer.Run()
+}
+
+func runMySQLWithLogger(cfg *config.Config, logger *logger.Logger, stepProgress *progress.StepProgress) error {
+	logger.Info("MySQL安装: 部署MySQL主从集群")
+	stepProgress.UpdateStepProgress("安装MySQL数据库...")
+	mysqlInstaller := mysql.NewMySQLInstaller(cfg)
+	return mysqlInstaller.Run()
+}
+
+func runRainbondWithLogger(cfg *config.Config, logger *logger.Logger, stepProgress *progress.StepProgress) error {
+	logger.Info("Rainbond安装: 部署Rainbond应用管理平台")
+	stepProgress.UpdateStepProgress("安装Rainbond平台...")
 	rainbondInstaller := rainbond.NewRainbondInstaller(cfg)
 	return rainbondInstaller.Run()
 }

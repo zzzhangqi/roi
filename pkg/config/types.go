@@ -13,7 +13,8 @@ type Host struct {
 	User        string     `yaml:"user"`
 	Password    string     `yaml:"password,omitempty"`
 	SSHKey      string     `yaml:"ssh_key,omitempty"`
-	Role        []string   `yaml:"role"`
+	Role        []string   `yaml:"role"`                   // Kubernetes角色：master, etcd, worker
+	RbdRole     []string   `yaml:"rbd_role,omitempty"`     // Rainbond角色：rbd-gateway, rbd-chaos
 	MySQLMaster bool       `yaml:"mysql_master,omitempty"` // 是否为MySQL Master节点
 	MySQLSlave  bool       `yaml:"mysql_slave,omitempty"`  // 是否为MySQL Slave节点
 	LVMConfig   *LVMConfig `yaml:"lvm_config,omitempty"`

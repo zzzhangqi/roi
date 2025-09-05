@@ -397,9 +397,6 @@ func (m *MySQLInstaller) setDefaults() {
 	if m.config.MySQL.ReplPassword == "" {
 		m.config.MySQL.ReplPassword = "repl_password"
 	}
-	if m.config.MySQL.StorageSize == "" {
-		m.config.MySQL.StorageSize = "20Gi"
-	}
 	if m.config.MySQL.DataPath == "" {
 		m.config.MySQL.DataPath = "/opt/rainbond/mysql"
 	}

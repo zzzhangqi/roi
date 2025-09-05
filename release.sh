@@ -4,10 +4,18 @@ IMAGE_DOMAIN=registry.cn-hangzhou.aliyuncs.com
 IMAGE_NAMESPACE=goodrain
 VERSION=v6.3.2-release
 
-if [ "$(arch)" == "x86_64" ]; then
-  ARCH="amd64"
+# Accept architecture from environment variable, fallback to system detection
+if [ -n "$ARCH" ]; then
+  # Use provided architecture
+  echo "Using provided architecture: $ARCH"
 else
-  ARCH="arm64"
+  # Auto-detect architecture
+  if [ "$(arch)" == "x86_64" ]; then
+    ARCH="amd64"
+  else
+    ARCH="arm64"
+  fi
+  echo "Auto-detected architecture: $ARCH"
 fi
 
 download_image() {
@@ -21,7 +29,7 @@ download_image() {
     "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-init-probe:${VERSION}"
     "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-monitor:v2.20.0"
     "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/apisix-ingress-controller:v1.8.3"
-    "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/apisix:3.9.1-debian"
+    "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/apisix:3.9.1-debian-fix"
     "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/local-path-provisioner:v0.0.30"
     "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/minio:RELEASE.2023-10-24T04-42-36Z"
     "${IMAGE_DOMAIN}/${IMAGE_NAMESPACE}/rbd-db:8.0.19"
@@ -72,6 +80,12 @@ docker run --rm -v "$(pwd)":/workspace -w /workspace -e GOPROXY=https://goproxy.
 
 }
 
+upload_tos() {
+  wget https://m645b3e1bb36e-mrap.mrap.accesspoint.tos-global.volces.com/linux/$ARCH/tosutil
+  chmod +x tosutil
+  ./tosutil config -i "$TOS_ACCESS_KEY" -k "$TOS_SECRET_KEY" -e tos-cn-beijing.volces.com -re cn-beijing
+  ./tosutil cp roi.tar.gz tos://rainbond-pkg/v6.x/roi-$ARCH.tar.gz
+}
 
 main() {
   build_roi
@@ -91,6 +105,7 @@ main() {
   mv helm roi-offline-package
 
   tar -zcvf roi.tar.gz roi-offline-package
+  upload_tos
 }
 
 main
