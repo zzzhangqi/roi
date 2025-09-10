@@ -270,6 +270,21 @@ func runCheckWithLogger(cfg *config.Config, logger *logger.Logger, stepProgress 
 func runLVMWithLogger(cfg *config.Config, logger *logger.Logger, stepProgress *progress.StepProgress) error {
 	logger.Info("LVM配置: 检查并配置逻辑卷管理")
 	stepProgress.UpdateStepProgress("配置LVM逻辑卷...")
+	
+	// 检查是否有LVM配置
+	hasLVMConfig := false
+	for _, host := range cfg.Hosts {
+		if host.LVMConfig != nil && len(host.LVMConfig.PVDevices) > 0 {
+			hasLVMConfig = true
+			break
+		}
+	}
+	
+	if !hasLVMConfig {
+		stepProgress.SkipStep("未找到 LVM 配置")
+		return nil
+	}
+	
 	lvmManager := lvm.NewLVMWithLogger(cfg, logger)
 	return lvmManager.ShowAndCreate()
 }
@@ -291,6 +306,24 @@ func runOptimizeWithLogger(cfg *config.Config, logger *logger.Logger, stepProgre
 func runMySQLWithLogger(cfg *config.Config, logger *logger.Logger, stepProgress *progress.StepProgress) error {
 	logger.Info("MySQL安装: 部署MySQL主从集群")
 	stepProgress.UpdateStepProgress("安装MySQL数据库...")
+	
+	// 检查是否有MySQL配置或MySQL节点
+	hasMySQLConfig := cfg.MySQL.Enabled
+	if !hasMySQLConfig {
+		// 检查是否有MySQL主节点或从节点
+		for _, host := range cfg.Hosts {
+			if host.MySQLMaster || host.MySQLSlave {
+				hasMySQLConfig = true
+				break
+			}
+		}
+	}
+	
+	if !hasMySQLConfig {
+		stepProgress.SkipStep("未找到 MySQL 配置或 MySQL 节点")
+		return nil
+	}
+	
 	mysqlInstaller := mysql.NewMySQLInstallerWithLogger(cfg, logger)
 	return mysqlInstaller.Run()
 }

@@ -116,7 +116,7 @@ func (r *RKE2Installer) Run() error {
 
 	// 阶段1: 检查当前状态
 	if r.logger != nil {
-		r.logger.Info("=== 阶段1: 检查RKE2状态 ===")
+		r.logger.Debug("=== 阶段1: 检查RKE2状态 ===")
 	}
 	status := r.checkRKE2Status()
 	r.printRKE2Status(status)
@@ -162,7 +162,7 @@ func (r *RKE2Installer) Run() error {
 
 	// 阶段2: 传输离线资源到所有节点
 	if r.logger != nil {
-		r.logger.Info("=== 阶段2: 传输离线资源到所有节点 ===")
+		r.logger.Debug("=== 阶段2: 传输离线资源到所有节点 ===")
 	}
 	if err := r.transferOfflineResourcesToAllNodes(); err != nil {
 		return fmt.Errorf("传输离线资源失败: %w", err)
@@ -170,7 +170,7 @@ func (r *RKE2Installer) Run() error {
 
 	// 阶段3: 验证所有节点的安装包完整性
 	if r.logger != nil {
-		r.logger.Info("=== 阶段3: 验证安装包完整性 ===")
+		r.logger.Debug("=== 阶段3: 验证安装包完整性 ===")
 	}
 	if err := r.validatePackageIntegrityOnAllNodes(); err != nil {
 		return fmt.Errorf("安装包完整性验证失败: %w", err)
@@ -178,7 +178,7 @@ func (r *RKE2Installer) Run() error {
 
 	// 阶段4: 顺序安装RKE2服务
 	if r.logger != nil {
-		r.logger.Info("=== 阶段4: 安装RKE2服务 ===")
+		r.logger.Debug("=== 阶段4: 安装RKE2服务 ===")
 	}
 
 	// 步骤1: 安装第一个etcd节点（必须包含etcd）
@@ -279,7 +279,7 @@ func (r *RKE2Installer) Run() error {
 
 	// 阶段5: 等待集群就绪
 	if r.logger != nil {
-		r.logger.Info("=== 阶段5: 等待集群就绪 ===")
+		r.logger.Debug("=== 阶段5: 等待集群就绪 ===")
 	}
 	if err := r.waitForClusterReady(*firstEtcdHost); err != nil {
 		return fmt.Errorf("等待集群就绪失败: %w", err)
@@ -287,7 +287,7 @@ func (r *RKE2Installer) Run() error {
 
 	// 阶段6: 等待所有节点服务稳定
 	if r.logger != nil {
-		r.logger.Info("=== 阶段6: 等待所有节点服务稳定 ===")
+		r.logger.Debug("=== 阶段6: 等待所有节点服务稳定 ===")
 	}
 	if r.logger != nil {
 		r.logger.Info("监控RKE2服务状态，等待所有节点就绪...")
@@ -340,7 +340,7 @@ func (r *RKE2Installer) Run() error {
 
 	// 阶段7: 最终状态验证
 	if r.logger != nil {
-		r.logger.Info("=== 阶段7: 验证安装结果 ===")
+		r.logger.Debug("=== 阶段7: 验证安装结果 ===")
 	}
 	finalStatus := r.checkRKE2Status()
 	r.printRKE2Status(finalStatus)
@@ -976,9 +976,9 @@ func (r *RKE2Installer) transferFileWithRsync(host config.Host, localPath, remot
 		rsyncCmd = exec.Command("rsync", args...)
 	}
 
-	// 设置输出到终端，让rsync直接显示进度条
-	rsyncCmd.Stdout = os.Stdout
-	rsyncCmd.Stderr = os.Stderr
+	// 抑制输出，避免干扰进度显示
+	// rsyncCmd.Stdout = os.Stdout
+	// rsyncCmd.Stderr = os.Stderr
 
 	if err := rsyncCmd.Run(); err != nil {
 		return fmt.Errorf("rsync传输失败: %w", err)
@@ -1517,16 +1517,16 @@ func (r *RKE2Installer) checkRKE2Status() map[string]*RKE2Status {
 	return results
 }
 
-// printRKE2Status 打印RKE2状态
+// printRKE2Status 打印RKE2状态到文件，不干扰控制台进度
 func (r *RKE2Installer) printRKE2Status(status map[string]*RKE2Status) {
 	if r.logger != nil {
-		r.logger.Info("\n" + strings.Repeat("=", 80))
+		r.logger.Debug("\n" + strings.Repeat("=", 80))
 	}
 	if r.logger != nil {
-		r.logger.Info("                        RKE2 集群状态")
+		r.logger.Debug("                        RKE2 集群状态")
 	}
 	if r.logger != nil {
-		r.logger.Info(strings.Repeat("=", 80))
+		r.logger.Debug(strings.Repeat("=", 80))
 	}
 
 	// 统计信息
@@ -1538,7 +1538,7 @@ func (r *RKE2Installer) printRKE2Status(status map[string]*RKE2Status) {
 	for i, host := range r.config.Hosts {
 		if i > 0 {
 			if r.logger != nil {
-				r.logger.Info("")
+				r.logger.Debug("")
 			}
 		}
 
@@ -1578,39 +1578,39 @@ func (r *RKE2Installer) printRKE2Status(status map[string]*RKE2Status) {
 		}
 
 		if r.logger != nil {
-			r.logger.Info(fmt.Sprintf("┌─ RKE2 #%d %s %s", i+1, statusIcon, result.Status))
+			r.logger.Debug(fmt.Sprintf("┌─ RKE2 #%d %s %s", i+1, statusIcon, result.Status))
 		}
 		if r.logger != nil {
-			r.logger.Info(fmt.Sprintf("│  IP地址        : %s", result.IP))
+			r.logger.Debug(fmt.Sprintf("│  IP地址        : %s", result.IP))
 		}
 		if r.logger != nil {
-			r.logger.Info(fmt.Sprintf("│  节点角色      : %s (%s)", strings.Join(result.Role, ","), role))
+			r.logger.Debug(fmt.Sprintf("│  节点角色      : %s (%s)", strings.Join(result.Role, ","), role))
 		}
 		if r.logger != nil {
-			r.logger.Info(fmt.Sprintf("│  运行状态      : %t", result.Running))
+			r.logger.Debug(fmt.Sprintf("│  运行状态      : %t", result.Running))
 		}
 		if result.Error != "" {
 			if r.logger != nil {
-				r.logger.Info(fmt.Sprintf("│  错误信息      : %s", result.Error))
+				r.logger.Debug(fmt.Sprintf("│  错误信息      : %s", result.Error))
 			}
 		}
 		if r.logger != nil {
-			r.logger.Info("└" + strings.Repeat("─", 50))
+			r.logger.Debug("└" + strings.Repeat("─", 50))
 		}
 	}
 
 	if r.logger != nil {
-		r.logger.Info("\n" + strings.Repeat("=", 80))
+		r.logger.Debug("\n" + strings.Repeat("=", 80))
 	}
 	if r.logger != nil {
-		r.logger.Info(fmt.Sprintf("集群总结: %d/%d个RKE2节点运行中, %d个Server节点, %d个Agent节点",
+		r.logger.Debug(fmt.Sprintf("集群总结: %d/%d个RKE2节点运行中, %d个Server节点, %d个Agent节点",
 			running, total, servers, agents))
 	}
 	if r.logger != nil {
-		r.logger.Info(strings.Repeat("=", 80))
+		r.logger.Debug(strings.Repeat("=", 80))
 	}
 	if r.logger != nil {
-		r.logger.Info("")
+		r.logger.Debug("")
 	}
 }
 
@@ -1910,10 +1910,10 @@ func (r *RKE2Installer) checkRKE2Installed(host config.Host) (bool, error) {
 	sshCmd := r.buildSSHCommand(host, checkCmd)
 	output, err := sshCmd.CombinedOutput()
 
-	// 显示检查输出
+	// 显示检查输出到文件，不输出到控制台
 	if len(output) > 0 {
 		if r.logger != nil {
-			r.logger.Info("主机 %s RKE2状态检查:\n%s", host.IP, string(output))
+			r.logger.Debug("主机 %s RKE2状态检查:\n%s", host.IP, string(output))
 		}
 	}
 

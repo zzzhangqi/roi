@@ -265,6 +265,22 @@ func (sp *StepProgress) CompleteStep() {
 	}
 }
 
+// SkipStep 跳过步骤
+func (sp *StepProgress) SkipStep(reason string) {
+	if sp.spinner != nil {
+		sp.spinner.Stop() // 停止spinner并清除当前行
+	}
+	sp.isRunning = false
+	
+	// 清除当前行并显示跳过信息
+	fmt.Printf("\r\033[K\033[36m[INFO]\033[0m [\033[33m%s %d/%d\033[0m] %s，跳过。\n", sp.getStagePrefix(), sp.currentStep, sp.totalSteps, reason)
+	
+	// 记录跳过信息到文件
+	if sp.logger != nil {
+		sp.logger.InfoToFileOnly("步骤跳过: %s - %s", sp.stepName, reason)
+	}
+}
+
 // getHostInfo 获取主机信息显示文本
 func (sp *StepProgress) getHostInfo() string {
 	if len(sp.hostIPs) == 0 {
