@@ -123,6 +123,7 @@ type StepProgress struct {
 	logger         Logger
 	isRunning      bool
 	spinner        *Spinner
+	isSkipped      bool  // 记录步骤是否被跳过
 	
 	// 子阶段信息
 	subInfo        string
@@ -156,6 +157,7 @@ func (sp *StepProgress) StartStep(stepName string) {
 	sp.currentStep++
 	sp.stepName = stepName
 	sp.isRunning = true
+	sp.isSkipped = false  // 重置跳过状态
 	
 	// 如果有logger，抑制其控制台输出
 	if sp.logger != nil {
@@ -250,6 +252,11 @@ func (sp *StepProgress) StartSpinnerIfNeeded() {
 }
 
 func (sp *StepProgress) CompleteStep() {
+	// 如果步骤已经被跳过，不要覆盖跳过消息
+	if sp.isSkipped {
+		return
+	}
+	
 	if sp.spinner != nil {
 		sp.spinner.Stop() // 停止spinner并清除当前行
 	}
@@ -271,6 +278,7 @@ func (sp *StepProgress) SkipStep(reason string) {
 		sp.spinner.Stop() // 停止spinner并清除当前行
 	}
 	sp.isRunning = false
+	sp.isSkipped = true  // 标记为已跳过
 	
 	// 清除当前行并显示跳过信息
 	fmt.Printf("\r\033[K\033[36m[INFO]\033[0m [\033[33m%s %d/%d\033[0m] %s，跳过。\n", sp.getStagePrefix(), sp.currentStep, sp.totalSteps, reason)
