@@ -75,7 +75,7 @@ download_rainbond_chart() {
 
 build_roi() {
 docker run --rm -v "$(pwd)":/workspace -w /workspace -e GOPROXY=https://goproxy.cn,direct -e GOSUMDB=sum.golang.google.cn \
-  docker.cloud-sea.cloud/library/golang:1.20 \
+  registry.cn-hangzhou.aliyuncs.com/zqqq/golang:1.20 \
   sh -c "go mod tidy && go build -o roi cmd/main.go"
 
 }
