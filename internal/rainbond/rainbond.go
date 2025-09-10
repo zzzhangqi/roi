@@ -6,20 +6,28 @@ import (
 	"strings"
 
 	"github.com/rainbond/rainbond-offline-installer/pkg/config"
-	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
 
+// Logger 定义日志接口
+type Logger interface {
+	Debug(format string, v ...interface{})
+	Info(format string, v ...interface{})
+	Warn(format string, v ...interface{})
+	Error(format string, v ...interface{})
+}
+
 type RainbondInstaller struct {
 	config     *config.Config
-	logger     *logrus.Logger
+	logger     Logger
 	chartPath  string
 }
 
 func NewRainbondInstaller(cfg *config.Config) *RainbondInstaller {
-	logger := logrus.New()
-	logger.SetLevel(logrus.InfoLevel)
+	return NewRainbondInstallerWithLogger(cfg, nil)
+}
 
+func NewRainbondInstallerWithLogger(cfg *config.Config, logger Logger) *RainbondInstaller {
 	return &RainbondInstaller{
 		config:    cfg,
 		logger:    logger,
@@ -32,7 +40,9 @@ func (r *RainbondInstaller) SetChartPath(path string) {
 }
 
 func (r *RainbondInstaller) Run() error {
-	r.logger.Info("开始安装Rainbond...")
+	if r.logger != nil {
+		r.logger.Info("开始安装Rainbond...")
+	}
 
 	// 检查Kubernetes集群状态
 	if err := r.checkKubernetesReady(); err != nil {
@@ -48,7 +58,9 @@ func (r *RainbondInstaller) Run() error {
 	if exists, err := r.checkExistingDeployment(); err != nil {
 		return fmt.Errorf("检查现有Rainbond部署失败: %w", err)
 	} else if exists {
-		r.logger.Info("检测到Rainbond已存在，跳过安装")
+		if r.logger != nil {
+			r.logger.Info("检测到Rainbond已存在，跳过安装")
+		}
 		return nil
 	}
 
@@ -68,12 +80,16 @@ func (r *RainbondInstaller) Run() error {
 		return fmt.Errorf("安装Rainbond失败: %w", err)
 	}
 
-	r.logger.Info("🎉 Rainbond Helm安装命令执行完成!")
+	if r.logger != nil {
+		r.logger.Info("🎉 Rainbond Helm安装命令执行完成!")
+	}
 	return nil
 }
 
 func (r *RainbondInstaller) checkKubernetesReady() error {
-	r.logger.Info("检查Kubernetes集群状态...")
+	if r.logger != nil {
+		r.logger.Info("检查Kubernetes集群状态...")
+	}
 
 	cmd := r.buildSSHCommand(r.config.Hosts[0], "kubectl get nodes")
 	output, err := cmd.CombinedOutput()
@@ -82,7 +98,9 @@ func (r *RainbondInstaller) checkKubernetesReady() error {
 	}
 
 	if strings.Contains(string(output), "Ready") {
-		r.logger.Info("Kubernetes集群已就绪")
+		if r.logger != nil {
+			r.logger.Info("Kubernetes集群已就绪")
+		}
 		return nil
 	}
 
@@ -90,7 +108,9 @@ func (r *RainbondInstaller) checkKubernetesReady() error {
 }
 
 func (r *RainbondInstaller) checkHelmAvailable() error {
-	r.logger.Info("检查Helm可用性...")
+	if r.logger != nil {
+		r.logger.Info("检查Helm可用性...")
+	}
 
 	// 检查当前目录是否有helm二进制
 	helmPath := "./helm"
@@ -101,25 +121,35 @@ func (r *RainbondInstaller) checkHelmAvailable() error {
 	// 检查第一台节点是否有helm
 	cmd := r.buildSSHCommand(r.config.Hosts[0], "which helm")
 	if err := cmd.Run(); err != nil {
-		r.logger.Info("第一台节点未找到helm，正在安装...")
+		if r.logger != nil {
+			r.logger.Info("第一台节点未找到helm，正在安装...")
+		}
 		if err := r.installHelmBinary(); err != nil {
 			return fmt.Errorf("安装helm二进制失败: %w", err)
 		}
 	} else {
-		r.logger.Info("第一台节点已安装helm")
+		if r.logger != nil {
+			r.logger.Info("第一台节点已安装helm")
+		}
 	}
 
-	r.logger.Info("Helm可用")
+	if r.logger != nil {
+		r.logger.Info("Helm可用")
+	}
 	return nil
 }
 
 func (r *RainbondInstaller) installHelmBinary() error {
-	r.logger.Info("复制helm二进制到第一台节点...")
+	if r.logger != nil {
+		r.logger.Info("复制helm二进制到第一台节点...")
+	}
 
 	helmPath := "./helm"
 	host := r.config.Hosts[0]
 	
-	r.logger.Infof("正在向节点 %s 安装helm...", host.IP)
+	if r.logger != nil {
+		r.logger.Info("正在向节点 %s 安装helm...", host.IP)
+	}
 
 	// 复制helm二进制到远程节点
 	var scpCmd *exec.Cmd
@@ -164,12 +194,16 @@ func (r *RainbondInstaller) installHelmBinary() error {
 		return fmt.Errorf("验证helm安装失败，节点 %s: %w, 输出: %s", host.IP, err, string(output))
 	}
 
-	r.logger.Infof("节点 %s helm安装成功", host.IP)
+	if r.logger != nil {
+		r.logger.Info("节点 %s helm安装成功", host.IP)
+	}
 	return nil
 }
 
 func (r *RainbondInstaller) checkExistingDeployment() (bool, error) {
-	r.logger.Info("检查现有Rainbond部署...")
+	if r.logger != nil {
+		r.logger.Info("检查现有Rainbond部署...")
+	}
 
 	namespace := r.config.Rainbond.Namespace
 	if namespace == "" {
@@ -187,12 +221,16 @@ func (r *RainbondInstaller) createNamespace() error {
 		namespace = "rbd-system"
 	}
 
-	r.logger.Infof("创建命名空间 %s...", namespace)
+	if r.logger != nil {
+		r.logger.Info("创建命名空间 %s...", namespace)
+	}
 
 	// 检查命名空间是否已存在
 	cmd := r.buildSSHCommand(r.config.Hosts[0], fmt.Sprintf("kubectl get namespace %s", namespace))
 	if err := cmd.Run(); err == nil {
-		r.logger.Infof("命名空间 %s 已存在，跳过创建", namespace)
+		if r.logger != nil {
+			r.logger.Info("命名空间 %s 已存在，跳过创建", namespace)
+		}
 		return nil
 	}
 
@@ -203,12 +241,16 @@ func (r *RainbondInstaller) createNamespace() error {
 		return fmt.Errorf("创建命名空间失败: %w, 输出: %s", err, string(output))
 	}
 
-	r.logger.Infof("命名空间 %s 创建成功", namespace)
+	if r.logger != nil {
+		r.logger.Info("命名空间 %s 创建成功", namespace)
+	}
 	return nil
 }
 
 func (r *RainbondInstaller) generateValuesFile() (string, error) {
-	r.logger.Info("重新生成Helm values文件（基于最新配置）...")
+	if r.logger != nil {
+		r.logger.Info("重新生成Helm values文件（基于最新配置）...")
+	}
 
 	// 合并默认配置和用户配置
 	values := make(map[string]interface{})
@@ -226,7 +268,9 @@ func (r *RainbondInstaller) generateValuesFile() (string, error) {
 
 	// 如果启用了MySQL，自动配置数据库连接
 	if r.config.MySQL.Enabled {
-		r.logger.Info("检测到MySQL已启用，自动配置数据库连接...")
+		if r.logger != nil {
+			r.logger.Info("检测到MySQL已启用，自动配置数据库连接...")
+		}
 		
 		cluster, ok := values["Cluster"].(map[string]interface{})
 		if !ok {
@@ -286,17 +330,25 @@ func (r *RainbondInstaller) generateValuesFile() (string, error) {
 		return "", fmt.Errorf("写入values文件失败: %w", err)
 	}
 
-	r.logger.Infof("Values文件已重新生成并保存至: %s", valuesFile)
+	if r.logger != nil {
+		r.logger.Info("Values文件已重新生成并保存至: %s", valuesFile)
+	}
 	if len(yamlData) > 200 {
-		r.logger.Debugf("Values内容预览: %s...", yamlData[:200])
+		if r.logger != nil {
+			r.logger.Debug("Values内容预览: %s...", yamlData[:200])
+		}
 	} else {
-		r.logger.Debugf("Values内容: %s", yamlData)
+		if r.logger != nil {
+			r.logger.Debug("Values内容: %s", yamlData)
+		}
 	}
 	return valuesFile, nil
 }
 
 func (r *RainbondInstaller) installHelmChart(valuesFile string) error {
-	r.logger.Info("开始安装Rainbond Helm Chart...")
+	if r.logger != nil {
+		r.logger.Info("开始安装Rainbond Helm Chart...")
+	}
 
 	namespace := r.config.Rainbond.Namespace
 	if namespace == "" {
@@ -315,23 +367,31 @@ func (r *RainbondInstaller) installHelmChart(valuesFile string) error {
 	helmCmd := fmt.Sprintf("helm install %s %s --namespace %s --values %s --create-namespace --wait --timeout=20m",
 		releaseName, remoteTgzPath, namespace, valuesFile)
 
-	r.logger.Infof("执行helm install: %s", helmCmd)
+	if r.logger != nil {
+		r.logger.Info("执行helm install: %s", helmCmd)
+	}
 	cmd := r.buildSSHCommand(r.config.Hosts[0], helmCmd)
 	
 	// 设置较长的超时时间
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		r.logger.Errorf("Helm安装输出: %s", string(output))
+		if r.logger != nil {
+			r.logger.Error("Helm安装输出: %s", string(output))
+		}
 		return fmt.Errorf("helm install失败: %w", err)
 	}
 
-	r.logger.Info("Rainbond Helm Chart安装成功")
-	r.logger.Infof("Helm安装输出: %s", string(output))
+	if r.logger != nil {
+		r.logger.Info("Rainbond Helm Chart安装成功")
+		r.logger.Info("Helm安装输出: %s", string(output))
+	}
 	return nil
 }
 
 func (r *RainbondInstaller) transferChartToRemote() error {
-	r.logger.Info("传输Helm Chart包到远程节点...")
+	if r.logger != nil {
+		r.logger.Info("传输Helm Chart包到远程节点...")
+	}
 
 	host := r.config.Hosts[0]
 	
@@ -372,7 +432,9 @@ func (r *RainbondInstaller) transferChartToRemote() error {
 		return fmt.Errorf("传输tgz包失败: %w, 输出: %s", err, string(output))
 	}
 
-	r.logger.Info("Chart tgz包传输完成")
+	if r.logger != nil {
+		r.logger.Info("Chart tgz包传输完成")
+	}
 	return nil
 }
 

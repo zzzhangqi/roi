@@ -20,6 +20,7 @@ type Logger struct {
 	fileLogger      *log.Logger
 	consoleLogger   *log.Logger
 	logFile         *os.File
+	logFilePath     string   // 日志文件路径
 	consoleLevel    LogLevel // 控制台输出级别
 	fileLevel       LogLevel // 文件输出级别
 	suppressConsole bool     // 是否抑制控制台输出（进度条模式）
@@ -43,6 +44,7 @@ func NewLogger(consoleLevel, fileLevel LogLevel) (*Logger, error) {
 		fileLogger:      log.New(logFile, "", log.LstdFlags),
 		consoleLogger:   log.New(os.Stdout, "", log.LstdFlags),
 		logFile:         logFile,
+		logFilePath:     logFileName,
 		consoleLevel:    consoleLevel,
 		fileLevel:       fileLevel,
 		suppressConsole: false,
@@ -111,6 +113,11 @@ func (l *Logger) InfoToConsoleOnly(format string, v ...interface{}) {
 		message := fmt.Sprintf(format, v...)
 		l.consoleLogger.Printf("[INFO] %s", message)
 	}
+}
+
+// GetLogFilePath 返回当前日志文件的路径
+func (l *Logger) GetLogFilePath() string {
+	return l.logFilePath
 }
 
 func (l *Logger) Close() error {

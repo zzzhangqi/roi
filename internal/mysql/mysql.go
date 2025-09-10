@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/rainbond/rainbond-offline-installer/pkg/config"
-	"github.com/sirupsen/logrus"
 )
 
 const mysqlMasterYAML = `---
@@ -304,15 +303,24 @@ spec:
           echo "MySQL集群初始化和验证完成!"
 `
 
+// Logger 定义日志接口
+type Logger interface {
+	Debug(format string, v ...interface{})
+	Info(format string, v ...interface{})
+	Warn(format string, v ...interface{})
+	Error(format string, v ...interface{})
+}
+
 type MySQLInstaller struct {
 	config *config.Config
-	logger *logrus.Logger
+	logger Logger
 }
 
 func NewMySQLInstaller(cfg *config.Config) *MySQLInstaller {
-	logger := logrus.New()
-	logger.SetLevel(logrus.InfoLevel)
+	return NewMySQLInstallerWithLogger(cfg, nil)
+}
 
+func NewMySQLInstallerWithLogger(cfg *config.Config, logger Logger) *MySQLInstaller {
 	return &MySQLInstaller{
 		config: cfg,
 		logger: logger,
@@ -320,11 +328,15 @@ func NewMySQLInstaller(cfg *config.Config) *MySQLInstaller {
 }
 
 func (m *MySQLInstaller) Run() error {
-	m.logger.Info("开始部署MySQL主从集群...")
+	if m.logger != nil {
+		m.logger.Info("开始部署MySQL主从集群...")
+	}
 
 	// 检查MySQL配置
 	if !m.config.MySQL.Enabled {
-		m.logger.Info("MySQL部署未启用，跳过MySQL安装")
+		if m.logger != nil {
+			m.logger.Info("MySQL部署未启用，跳过MySQL安装")
+		}
 		return nil
 	}
 
@@ -340,7 +352,9 @@ func (m *MySQLInstaller) Run() error {
 	if exists, err := m.checkExistingDeployment(); err != nil {
 		return fmt.Errorf("检查现有MySQL部署失败: %w", err)
 	} else if exists {
-		m.logger.Info("检测到MySQL集群已存在，跳过部署")
+		if m.logger != nil {
+			m.logger.Info("检测到MySQL集群已存在，跳过部署")
+		}
 		return m.verifyDeployment()
 	}
 
@@ -355,14 +369,18 @@ func (m *MySQLInstaller) Run() error {
 	}
 
 	// 部署MySQL Master
-	m.logger.Info("=== 部署MySQL Master ===")
+	if m.logger != nil {
+		m.logger.Info("=== 部署MySQL Master ===")
+	}
 	if err := m.deployMaster(); err != nil {
 		return fmt.Errorf("部署MySQL Master失败: %w", err)
 	}
 
 	// 检查是否有配置Slave节点，如果有则部署MySQL Slave
 	if m.hasSlaveNode() {
-		m.logger.Info("=== 部署MySQL Slave ===")
+		if m.logger != nil {
+			m.logger.Info("=== 部署MySQL Slave ===")
+		}
 		if err := m.deploySlave(); err != nil {
 			return fmt.Errorf("部署MySQL Slave失败: %w", err)
 		}
@@ -383,7 +401,9 @@ func (m *MySQLInstaller) Run() error {
 		return fmt.Errorf("验证MySQL部署失败: %w", err)
 	}
 
-	m.logger.Info("🎉 MySQL主从集群部署完成!")
+	if m.logger != nil {
+		m.logger.Info("🎉 MySQL主从集群部署完成!")
+	}
 	return nil
 }
 
@@ -403,7 +423,9 @@ func (m *MySQLInstaller) setDefaults() {
 }
 
 func (m *MySQLInstaller) checkKubernetesReady() error {
-	m.logger.Info("检查Kubernetes集群状态...")
+	if m.logger != nil {
+		m.logger.Info("检查Kubernetes集群状态...")
+	}
 
 	cmd := m.buildSSHCommand(m.config.Hosts[0], "kubectl get nodes")
 	output, err := cmd.CombinedOutput()
@@ -412,7 +434,9 @@ func (m *MySQLInstaller) checkKubernetesReady() error {
 	}
 
 	if strings.Contains(string(output), "Ready") {
-		m.logger.Info("Kubernetes集群已就绪")
+		if m.logger != nil {
+			m.logger.Info("Kubernetes集群已就绪")
+		}
 		return nil
 	}
 
@@ -420,7 +444,9 @@ func (m *MySQLInstaller) checkKubernetesReady() error {
 }
 
 func (m *MySQLInstaller) checkExistingDeployment() (bool, error) {
-	m.logger.Info("检查现有MySQL部署...")
+	if m.logger != nil {
+		m.logger.Info("检查现有MySQL部署...")
+	}
 
 	cmd := m.buildSSHCommand(m.config.Hosts[0], "kubectl get statefulset mysql-master -n rbd-system")
 	err := cmd.Run()
@@ -428,7 +454,9 @@ func (m *MySQLInstaller) checkExistingDeployment() (bool, error) {
 }
 
 func (m *MySQLInstaller) createDataDirectories() error {
-	m.logger.Info("创建MySQL数据存储目录...")
+	if m.logger != nil {
+		m.logger.Info("创建MySQL数据存储目录...")
+	}
 
 	// 在MySQL Master节点上创建master数据目录
 	masterHost := m.getMasterHost()
@@ -440,9 +468,13 @@ func (m *MySQLInstaller) createDataDirectories() error {
 			masterPath, masterPath, masterPath, masterPath))
 
 		if err := cmd.Run(); err != nil {
-			m.logger.Warnf("主机 %s: 创建Master数据目录失败: %v", masterHost.IP, err)
+			if m.logger != nil {
+				m.logger.Warn("主机 %s: 创建Master数据目录失败: %v", masterHost.IP, err)
+			}
 		} else {
-			m.logger.Infof("主机 %s: Master数据目录创建成功", masterHost.IP)
+			if m.logger != nil {
+				m.logger.Info("主机 %s: Master数据目录创建成功", masterHost.IP)
+			}
 		}
 	}
 
@@ -456,9 +488,13 @@ func (m *MySQLInstaller) createDataDirectories() error {
 			slavePath, slavePath, slavePath, slavePath))
 
 		if err := cmd.Run(); err != nil {
-			m.logger.Warnf("主机 %s: 创建Slave数据目录失败: %v", slaveHost.IP, err)
+			if m.logger != nil {
+				m.logger.Warn("主机 %s: 创建Slave数据目录失败: %v", slaveHost.IP, err)
+			}
 		} else {
-			m.logger.Infof("主机 %s: Slave数据目录创建成功", slaveHost.IP)
+			if m.logger != nil {
+				m.logger.Info("主机 %s: Slave数据目录创建成功", slaveHost.IP)
+			}
 		}
 	}
 
@@ -514,15 +550,21 @@ func (m *MySQLInstaller) deploySlave() error {
 }
 
 func (m *MySQLInstaller) waitForDeployment() error {
-	m.logger.Info("等待MySQL部署就绪...")
+	if m.logger != nil {
+		m.logger.Info("等待MySQL部署就绪...")
+	}
 
 	// 等待MySQL Master就绪
-	m.logger.Info("等待MySQL Master就绪...")
+	if m.logger != nil {
+		m.logger.Info("等待MySQL Master就绪...")
+	}
 	for i := 0; i < 60; i++ { // 最多等待10分钟
 		cmd := m.buildSSHCommand(m.config.Hosts[0], "kubectl get pod -l app=mysql-master -n rbd-system --field-selector=status.phase=Running")
 		output, err := cmd.Output()
 		if err == nil && len(strings.TrimSpace(string(output))) > 0 {
-			m.logger.Info("MySQL Master已就绪")
+			if m.logger != nil {
+				m.logger.Info("MySQL Master已就绪")
+			}
 			break
 		}
 
@@ -531,17 +573,23 @@ func (m *MySQLInstaller) waitForDeployment() error {
 		}
 
 		time.Sleep(10 * time.Second)
-		m.logger.Debugf("等待MySQL Master就绪... (%d/60)", i+1)
+		if m.logger != nil {
+			m.logger.Debug("等待MySQL Master就绪... (%d/60)", i+1)
+		}
 	}
 
 	// 如果有Slave节点，等待Slave就绪
 	if m.hasSlaveNode() {
-		m.logger.Info("等待MySQL Slave就绪...")
+		if m.logger != nil {
+			m.logger.Info("等待MySQL Slave就绪...")
+		}
 		for i := 0; i < 60; i++ { // 最多等待10分钟
 			cmd := m.buildSSHCommand(m.config.Hosts[0], "kubectl get pod -l app=mysql-slave -n rbd-system --field-selector=status.phase=Running")
 			output, err := cmd.Output()
 			if err == nil && len(strings.TrimSpace(string(output))) > 0 {
+				if m.logger != nil {
 				m.logger.Info("MySQL Slave已就绪")
+			}
 				break
 			}
 
@@ -550,7 +598,9 @@ func (m *MySQLInstaller) waitForDeployment() error {
 			}
 
 			time.Sleep(10 * time.Second)
-			m.logger.Debugf("等待MySQL Slave就绪... (%d/60)", i+1)
+			if m.logger != nil {
+				m.logger.Debug("等待MySQL Slave就绪... (%d/60)", i+1)
+			}
 		}
 	}
 
@@ -558,17 +608,25 @@ func (m *MySQLInstaller) waitForDeployment() error {
 }
 
 func (m *MySQLInstaller) initializeDatabases() error {
-	m.logger.Info("初始化MySQL数据库...")
+	if m.logger != nil {
+		m.logger.Info("初始化MySQL数据库...")
+	}
 
 	// 先删除可能存在的Job（因为Job的spec.template字段不可变）
-	m.logger.Info("清理可能存在的MySQL初始化Job...")
+	if m.logger != nil {
+		m.logger.Info("清理可能存在的MySQL初始化Job...")
+	}
 	deleteCmd := m.buildSSHCommand(m.config.Hosts[0], "kubectl delete job mysql-init-databases -n rbd-system --ignore-not-found=true")
 	if err := deleteCmd.Run(); err != nil {
-		m.logger.Warnf("删除现有Job失败，但继续执行: %v", err)
+		if m.logger != nil {
+			m.logger.Warn("删除现有Job失败，但继续执行: %v", err)
+		}
 	}
 
 	// 等待Job删除完成
-	m.logger.Info("等待Job删除完成...")
+	if m.logger != nil {
+		m.logger.Info("等待Job删除完成...")
+	}
 	for i := 0; i < 30; i++ {
 		checkCmd := m.buildSSHCommand(m.config.Hosts[0], "kubectl get job mysql-init-databases -n rbd-system")
 		if err := checkCmd.Run(); err != nil {
@@ -576,7 +634,9 @@ func (m *MySQLInstaller) initializeDatabases() error {
 			break
 		}
 		if i == 29 {
-			m.logger.Warn("等待Job删除超时，但继续执行")
+			if m.logger != nil {
+				m.logger.Warn("等待Job删除超时，但继续执行")
+			}
 		}
 		time.Sleep(2 * time.Second)
 	}
@@ -599,7 +659,9 @@ func (m *MySQLInstaller) initializeDatabases() error {
 		return err
 	}
 
-	m.logger.Info("等待数据库初始化完成，实时显示日志...")
+	if m.logger != nil {
+		m.logger.Info("等待数据库初始化完成，实时显示日志...")
+	}
 
 	// 等待Job的Pod启动并获取日志
 	var podName string
@@ -608,7 +670,9 @@ func (m *MySQLInstaller) initializeDatabases() error {
 		output, err := cmd.Output()
 		if err == nil && strings.TrimSpace(string(output)) != "" {
 			podName = strings.TrimSpace(string(output))
-			m.logger.Infof("找到初始化Pod: %s", podName)
+			if m.logger != nil {
+				m.logger.Info("找到初始化Pod: %s", podName)
+			}
 			break
 		}
 		if i == 29 {
@@ -618,7 +682,9 @@ func (m *MySQLInstaller) initializeDatabases() error {
 	}
 
 	// 实时流式输出日志
-	m.logger.Info("=== MySQL初始化日志 ===")
+	if m.logger != nil {
+		m.logger.Info("=== MySQL初始化日志 ===")
+	}
 	logCmd := m.buildSSHCommand(m.config.Hosts[0], fmt.Sprintf("kubectl logs -f %s -n rbd-system", podName))
 
 	// 启动日志流
@@ -645,7 +711,9 @@ func (m *MySQLInstaller) initializeDatabases() error {
 			n, err := stdout.Read(buffer)
 			if err != nil {
 				if err.Error() != "EOF" {
-					m.logger.Warnf("读取日志失败: %v", err)
+					if m.logger != nil {
+						m.logger.Warn("读取日志失败: %v", err)
+					}
 				}
 				break
 			}
@@ -689,12 +757,16 @@ func (m *MySQLInstaller) initializeDatabases() error {
 		return fmt.Errorf("数据库初始化超时")
 	}
 
-	m.logger.Info("=== MySQL初始化完成 ===")
+	if m.logger != nil {
+		m.logger.Info("=== MySQL初始化完成 ===")
+	}
 	return nil
 }
 
 func (m *MySQLInstaller) verifyDeployment() error {
-	m.logger.Info("验证MySQL部署状态...")
+	if m.logger != nil {
+		m.logger.Info("验证MySQL部署状态...")
+	}
 
 	// 检查Master状态
 	cmd := m.buildSSHCommand(m.config.Hosts[0], "kubectl get pods -l app=mysql-master -n rbd-system")
@@ -703,8 +775,10 @@ func (m *MySQLInstaller) verifyDeployment() error {
 		return fmt.Errorf("检查MySQL Master状态失败: %w", err)
 	}
 
-	m.logger.Info("MySQL Master状态:")
-	m.logger.Info(string(output))
+	if m.logger != nil {
+		m.logger.Info("MySQL Master状态:")
+		m.logger.Info(string(output))
+	}
 
 	// 如果有Slave节点，检查Slave状态
 	if m.hasSlaveNode() {
@@ -714,8 +788,10 @@ func (m *MySQLInstaller) verifyDeployment() error {
 			return fmt.Errorf("检查MySQL Slave状态失败: %w", err)
 		}
 
-		m.logger.Info("MySQL Slave状态:")
-		m.logger.Info(string(output))
+		if m.logger != nil {
+			m.logger.Info("MySQL Slave状态:")
+			m.logger.Info(string(output))
+		}
 	}
 
 	// 检查Service状态
@@ -725,8 +801,10 @@ func (m *MySQLInstaller) verifyDeployment() error {
 		return fmt.Errorf("检查MySQL服务状态失败: %w", err)
 	}
 
-	m.logger.Info("MySQL服务状态:")
-	m.logger.Info(string(output))
+	if m.logger != nil {
+		m.logger.Info("MySQL服务状态:")
+		m.logger.Info(string(output))
+	}
 
 	return nil
 }
@@ -790,12 +868,16 @@ func (m *MySQLInstaller) hasSlaveNode() bool {
 }
 
 func (m *MySQLInstaller) createNamespace() error {
-	m.logger.Info("创建rbd-system命名空间...")
+	if m.logger != nil {
+		m.logger.Info("创建rbd-system命名空间...")
+	}
 
 	// 检查命名空间是否已存在
 	cmd := m.buildSSHCommand(m.config.Hosts[0], "kubectl get namespace rbd-system")
 	if err := cmd.Run(); err == nil {
-		m.logger.Info("命名空间rbd-system已存在，跳过创建")
+		if m.logger != nil {
+			m.logger.Info("命名空间rbd-system已存在，跳过创建")
+		}
 		return nil
 	}
 
@@ -806,12 +888,16 @@ func (m *MySQLInstaller) createNamespace() error {
 		return fmt.Errorf("创建命名空间失败: %w, 输出: %s", err, string(output))
 	}
 
-	m.logger.Info("命名空间rbd-system创建成功")
+	if m.logger != nil {
+		m.logger.Info("命名空间rbd-system创建成功")
+	}
 	return nil
 }
 
 func (m *MySQLInstaller) applyYAMLOnFirstNode(yamlContent, component string) error {
-	m.logger.Infof("在第一个节点上部署%s...", component)
+	if m.logger != nil {
+		m.logger.Info("在第一个节点上部署%s...", component)
+	}
 
 	// 将YAML内容写入临时文件
 	tempFile := fmt.Sprintf("/tmp/mysql-%s.yaml", strings.ToLower(strings.ReplaceAll(component, " ", "-")))
@@ -836,6 +922,8 @@ func (m *MySQLInstaller) applyYAMLOnFirstNode(yamlContent, component string) err
 	cmd = m.buildSSHCommand(m.config.Hosts[0], cleanCmd)
 	cmd.Run() // 忽略清理错误
 
-	m.logger.Infof("%s部署成功", component)
+	if m.logger != nil {
+		m.logger.Info("%s部署成功", component)
+	}
 	return nil
 }

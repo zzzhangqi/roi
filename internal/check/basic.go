@@ -9,14 +9,30 @@ import (
 	"strings"
 
 	"github.com/rainbond/rainbond-offline-installer/pkg/config"
-	"github.com/sirupsen/logrus"
 )
 
+// Logger 定义日志接口
+type Logger interface {
+	Debug(format string, v ...interface{})
+	Info(format string, v ...interface{})
+	Warn(format string, v ...interface{})
+	Error(format string, v ...interface{})
+}
+
+// StepProgress 进度接口
+type StepProgress interface {
+	StartSubSteps(totalSubSteps int)
+	StartSubStep(subStepName string)
+	CompleteSubStep()
+	CompleteSubSteps()
+}
+
 type BasicChecker struct {
-	config   *config.Config
-	logger   *logrus.Logger
-	results  map[string]*BasicCheckResult
-	warnings []string
+	config       *config.Config
+	logger       Logger
+	stepProgress StepProgress
+	results      map[string]*BasicCheckResult
+	warnings     []string
 }
 
 type BasicCheckResult struct {
@@ -33,9 +49,14 @@ type BasicCheckResult struct {
 }
 
 func NewBasicChecker(cfg *config.Config) *BasicChecker {
-	logger := logrus.New()
-	logger.SetLevel(logrus.InfoLevel)
+	return NewBasicCheckerWithLogger(cfg, nil)
+}
 
+func NewBasicCheckerWithLogger(cfg *config.Config, logger Logger) *BasicChecker {
+	return NewBasicCheckerWithLoggerAndProgress(cfg, logger, nil)
+}
+
+func NewBasicCheckerWithLoggerAndProgress(cfg *config.Config, logger Logger, stepProgress StepProgress) *BasicChecker {
 	results := make(map[string]*BasicCheckResult)
 	for _, host := range cfg.Hosts {
 		results[host.IP] = &BasicCheckResult{
@@ -49,38 +70,69 @@ func NewBasicChecker(cfg *config.Config) *BasicChecker {
 	}
 
 	return &BasicChecker{
-		config:   cfg,
-		logger:   logger,
-		results:  results,
-		warnings: make([]string, 0),
+		config:       cfg,
+		logger:       logger,
+		stepProgress: stepProgress,
+		results:      results,
+		warnings:     make([]string, 0),
 	}
 }
 
 func (c *BasicChecker) Run() error {
-	c.logger.Info("Starting basic system environment check...")
+	if c.logger != nil {
+		c.logger.Info("正在检查系统基础环境...")
+	}
 
 	checks := []struct {
 		name string
 		fn   func() error
 	}{
-		{"Host Connectivity", c.checkHosts},
-		{"SSH Connectivity", c.checkSSHConnectivity},
-		{"Inter-Host Connectivity", c.checkInterHostConnectivity},
-		{"Operating System", c.checkOS},
-		{"Architecture", c.checkArch},
-		{"Kernel Version", c.checkKernel},
+		{"主机连通性", c.checkHosts},
+		{"SSH连接", c.checkSSHConnectivity},
+		{"主机间连通性", c.checkInterHostConnectivity},
+		{"操作系统", c.checkOS},
+		{"系统架构", c.checkArch},
+		{"内核版本", c.checkKernel},
 		{"CPU", c.checkCPU},
-		{"Memory", c.checkMemory},
-		{"Root Partition", c.checkRootPartition},
+		{"内存", c.checkMemory},
+		{"根分区", c.checkRootPartition},
+	}
+
+	// 开始子步骤
+	if c.stepProgress != nil {
+		c.stepProgress.StartSubSteps(len(checks))
 	}
 
 	for _, check := range checks {
-		c.logger.Infof("Checking %s...", check.name)
+		// 开始子步骤
+		if c.stepProgress != nil {
+			c.stepProgress.StartSubStep(fmt.Sprintf("正在检查%s", check.name))
+		}
+		
+		if c.logger != nil {
+			c.logger.Info("正在检查 %s...", check.name)
+		}
+		
 		if err := check.fn(); err != nil {
-			c.logger.Errorf("Check failed for %s: %v", check.name, err)
+			if c.logger != nil {
+				c.logger.Error("检查失败 %s: %v", check.name, err)
+			}
 			return fmt.Errorf("check failed for %s: %w", check.name, err)
 		}
-		c.logger.Infof("✓ %s check passed", check.name)
+		
+		if c.logger != nil {
+			c.logger.Info("✓ %s 检查通过", check.name)
+		}
+		
+		// 完成子步骤
+		if c.stepProgress != nil {
+			c.stepProgress.CompleteSubStep()
+		}
+	}
+
+	// 完成所有子步骤
+	if c.stepProgress != nil {
+		c.stepProgress.CompleteSubSteps()
 	}
 
 	// 更新所有成功的主机状态
@@ -90,15 +142,21 @@ func (c *BasicChecker) Run() error {
 		}
 	}
 
-	c.logger.Info("All basic system checks passed successfully!")
+	if c.logger != nil {
+		c.logger.Info("所有基础系统检查都已成功完成！")
+	}
 	return c.printResultsTableAndConfirm()
 }
 
 func (c *BasicChecker) checkOS() error {
-	c.logger.Info("Checking remote hosts operating systems...")
+	if c.logger != nil {
+		c.logger.Info("正在检查远程主机操作系统...")
+	}
 
 	for i, host := range c.config.Hosts {
-		c.logger.Infof("Checking OS for host %s...", host.IP)
+		if c.logger != nil {
+			c.logger.Info("正在检查主机 %s 的操作系统...", host.IP)
+		}
 
 		// 构建 SSH 命令检查远程操作系统
 		sshCmd := c.buildSSHCommand(host, "cat /etc/os-release")
@@ -125,7 +183,9 @@ func (c *BasicChecker) checkOS() error {
 		detectedOS := "Unknown"
 		for _, os := range supported {
 			if strings.Contains(osInfo, os) {
-				c.logger.Infof("Host %s: detected supported OS containing '%s'", host.IP, os)
+				if c.logger != nil {
+					c.logger.Info("主机 %s: 检测到支持的操作系统 '%s'", host.IP, os)
+				}
 				detectedOS = os
 				osDetected = true
 				break
@@ -144,10 +204,14 @@ func (c *BasicChecker) checkOS() error {
 }
 
 func (c *BasicChecker) checkArch() error {
-	c.logger.Info("Checking remote hosts architecture...")
+	if c.logger != nil {
+		c.logger.Info("正在检查远程主机架构...")
+	}
 
 	for i, host := range c.config.Hosts {
-		c.logger.Infof("Checking architecture for host %s...", host.IP)
+		if c.logger != nil {
+			c.logger.Info("正在检查主机 %s 的架构...", host.IP)
+		}
 
 		sshCmd := c.buildSSHCommand(host, "uname -m")
 		output, err := sshCmd.Output()
@@ -162,17 +226,23 @@ func (c *BasicChecker) checkArch() error {
 		}
 
 		c.results[host.IP].Arch = arch
-		c.logger.Infof("Host %s: architecture %s", host.IP, arch)
+		if c.logger != nil {
+			c.logger.Info("主机 %s: 架构 %s", host.IP, arch)
+		}
 	}
 
 	return nil
 }
 
 func (c *BasicChecker) checkKernel() error {
-	c.logger.Info("Checking remote hosts kernel version...")
+	if c.logger != nil {
+		c.logger.Info("正在检查远程主机内核版本...")
+	}
 
 	for i, host := range c.config.Hosts {
-		c.logger.Infof("Checking kernel version for host %s...", host.IP)
+		if c.logger != nil {
+			c.logger.Info("正在检查主机 %s 的内核版本...", host.IP)
+		}
 
 		sshCmd := c.buildSSHCommand(host, "uname -r")
 		output, err := sshCmd.Output()
@@ -183,15 +253,21 @@ func (c *BasicChecker) checkKernel() error {
 
 		kernel := strings.TrimSpace(string(output))
 		c.results[host.IP].Kernel = kernel
-		c.logger.Infof("Host %s: kernel version %s", host.IP, kernel)
+		if c.logger != nil {
+			c.logger.Info("主机 %s: 内核版本 %s", host.IP, kernel)
+		}
 
 		// 检查内核版本是否符合要求
 		if c.checkKernelCompatibility(kernel) {
-			c.logger.Infof("Host %s: kernel version is compatible", host.IP)
+			if c.logger != nil {
+				c.logger.Info("主机 %s: 内核版本兼容", host.IP)
+			}
 		} else {
 			warning := fmt.Sprintf("主机 %s 内核版本过低: %s (最少需要 4.x)", host.IP, kernel)
 			c.warnings = append(c.warnings, warning)
-			c.logger.Warnf("Host %s: kernel version %s is below minimum requirement (4.x)", host.IP, kernel)
+			if c.logger != nil {
+				c.logger.Warn("主机 %s: 内核版本 %s 低于最低要求 (4.x)", host.IP, kernel)
+			}
 		}
 	}
 
@@ -211,10 +287,14 @@ func (c *BasicChecker) checkKernelCompatibility(kernel string) bool {
 }
 
 func (c *BasicChecker) checkCPU() error {
-	c.logger.Info("Checking remote hosts CPU...")
+	if c.logger != nil {
+		c.logger.Info("正在检查远程主机CPU...")
+	}
 
 	for i, host := range c.config.Hosts {
-		c.logger.Infof("Checking CPU for host %s...", host.IP)
+		if c.logger != nil {
+			c.logger.Info("正在检查主机 %s 的CPU...", host.IP)
+		}
 
 		sshCmd := c.buildSSHCommand(host, "nproc")
 		output, err := sshCmd.Output()
@@ -233,17 +313,23 @@ func (c *BasicChecker) checkCPU() error {
 		}
 
 		c.results[host.IP].CPUCores = cpuCount
-		c.logger.Infof("Host %s: CPU cores: %d", host.IP, cpuCount)
+		if c.logger != nil {
+			c.logger.Info("主机 %s: CPU核心数: %d", host.IP, cpuCount)
+		}
 	}
 
 	return nil
 }
 
 func (c *BasicChecker) checkMemory() error {
-	c.logger.Info("Checking remote hosts memory...")
+	if c.logger != nil {
+		c.logger.Info("正在检查远程主机内存...")
+	}
 
 	for i, host := range c.config.Hosts {
-		c.logger.Infof("Checking memory for host %s...", host.IP)
+		if c.logger != nil {
+			c.logger.Info("正在检查主机 %s 的内存...", host.IP)
+		}
 
 		sshCmd := c.buildSSHCommand(host, "free -m | grep '^Mem:' | awk '{print $2}'")
 		output, err := sshCmd.Output()
@@ -258,13 +344,17 @@ func (c *BasicChecker) checkMemory() error {
 
 		memGB := memMB / 1024
 		c.results[host.IP].MemoryGB = memGB
-		
+
 		if memGB < 4 {
 			warning := fmt.Sprintf("主机 %s 内存不足: %d GB (最少需要 4 GB)", host.IP, memGB)
 			c.warnings = append(c.warnings, warning)
-			c.logger.Warnf("主机 %s 内存不足: %dGB (建议最少4GB)", host.IP, memGB)
+			if c.logger != nil {
+				c.logger.Warn("主机 %s 内存不足: %dGB (建议最少4GB)", host.IP, memGB)
+			}
 		} else {
-			c.logger.Infof("Host %s: Memory: %dGB", host.IP, memGB)
+			if c.logger != nil {
+				c.logger.Info("主机 %s: 内存: %dGB", host.IP, memGB)
+			}
 		}
 	}
 
@@ -272,9 +362,13 @@ func (c *BasicChecker) checkMemory() error {
 }
 
 func (c *BasicChecker) checkRootPartition() error {
-	c.logger.Info("Checking root partition space...")
+	if c.logger != nil {
+		c.logger.Info("正在检查根分区空间...")
+	}
 	for i, host := range c.config.Hosts {
-		c.logger.Infof("Checking root partition for host %s...", host.IP)
+		if c.logger != nil {
+			c.logger.Info("正在检查主机 %s 的根分区...", host.IP)
+		}
 		sshCmd := c.buildSSHCommand(host, "df -BG / | tail -1")
 		output, err := sshCmd.Output()
 		if err != nil {
@@ -286,16 +380,18 @@ func (c *BasicChecker) checkRootPartition() error {
 			totalSpaceStr := fields[1]
 			usage := fields[4]
 			availSpaceStr := fields[3]
-			
+
 			// 解析可用空间大小 (去掉G后缀)
 			availSizeStr := strings.TrimSuffix(availSpaceStr, "G")
 			availSpaceGB, err := strconv.Atoi(availSizeStr)
 			if err == nil && availSpaceGB < 50 {
 				warning := fmt.Sprintf("主机 %s 根分区可用空间不足: %d GB (最少需要 50 GB)", host.IP, availSpaceGB)
 				c.warnings = append(c.warnings, warning)
-				c.logger.Warnf("主机 %s 根分区空间不足: %dGB 可用 (建议最少50GB)", host.IP, availSpaceGB)
+				if c.logger != nil {
+					c.logger.Warn("主机 %s 根分区空间不足: %dGB 可用 (建议最少50GB)", host.IP, availSpaceGB)
+				}
 			}
-			
+
 			c.results[host.IP].RootSpace = fmt.Sprintf("%s/%s", availSpaceStr, totalSpaceStr)
 			c.results[host.IP].RootUsage = usage
 		} else {
@@ -306,13 +402,11 @@ func (c *BasicChecker) checkRootPartition() error {
 	return nil
 }
 
-
-
-
-
 func (c *BasicChecker) checkHosts() error {
 	for i, host := range c.config.Hosts {
-		c.logger.Infof("Checking host %s (%s)...", host.IP, strings.Join(host.Role, ","))
+		if c.logger != nil {
+			c.logger.Info("检查主机 %s (%s)...", host.IP, strings.Join(host.Role, ","))
+		}
 
 		cmd := exec.Command("ping", "-c", "1", "-W", "3", host.IP)
 		if err := cmd.Run(); err != nil {
@@ -326,7 +420,9 @@ func (c *BasicChecker) checkHosts() error {
 // checkSSHConnectivity 检查 SSH 连通性与认证能力
 func (c *BasicChecker) checkSSHConnectivity() error {
 	for i, host := range c.config.Hosts {
-		c.logger.Infof("Checking SSH connectivity for host %s...", host.IP)
+		if c.logger != nil {
+			c.logger.Info("正在检查主机 %s 的SSH连接...", host.IP)
+		}
 		sshCmd := c.buildSSHCommand(host, "echo ok")
 		output, err := sshCmd.CombinedOutput()
 		if err != nil {
@@ -347,7 +443,9 @@ func (c *BasicChecker) checkSSHConnectivity() error {
 		}
 		// 放宽判断：只要输出包含 ok（忽略大小写与前后提示），认为 SSH 可用
 		if !strings.Contains(strings.ToLower(string(output)), "ok") {
-			c.logger.Warnf("Host %s: unexpected SSH probe output: %s", host.IP, strings.TrimSpace(string(output)))
+			if c.logger != nil {
+				c.logger.Warn("主机 %s: 意外的SSH探测输出: %s", host.IP, strings.TrimSpace(string(output)))
+			}
 		}
 	}
 	return nil
@@ -355,10 +453,14 @@ func (c *BasicChecker) checkSSHConnectivity() error {
 
 // checkInterHostConnectivity 检查主机间连通性
 func (c *BasicChecker) checkInterHostConnectivity() error {
-	c.logger.Info("Checking inter-host connectivity...")
-	
+	if c.logger != nil {
+		c.logger.Info("检查主机间连通性...")
+	}
+
 	if len(c.config.Hosts) < 2 {
-		c.logger.Info("Only one host configured, skipping inter-host connectivity check")
+		if c.logger != nil {
+			c.logger.Info("仅配置一台主机，跳过主机间连接检查")
+		}
 		return nil
 	}
 
@@ -367,28 +469,30 @@ func (c *BasicChecker) checkInterHostConnectivity() error {
 			if i == j {
 				continue // 跳过自己
 			}
-			
-			c.logger.Infof("Testing connectivity from host %s to %s...", sourceHost.IP, targetHost.IP)
-			
+
+			if c.logger != nil {
+				c.logger.Info("测试主机的连通性 %s 到 %s...", sourceHost.IP, targetHost.IP)
+			}
+
 			// 使用SSH在源主机上执行ping命令到目标主机
 			pingCmd := fmt.Sprintf("ping -c 4 -W 3 %s", targetHost.IP)
 			sshCmd := c.buildSSHCommand(sourceHost, pingCmd)
 			output, err := sshCmd.CombinedOutput()
-			
+
 			if err != nil {
 				c.results[sourceHost.IP].Status = "失败"
-				return fmt.Errorf("host[%d] %s: failed to ping host %s: %w - %s", 
+				return fmt.Errorf("host[%d] %s: failed to ping host %s: %w - %s",
 					i, sourceHost.IP, targetHost.IP, err, strings.TrimSpace(string(output)))
 			}
-			
+
 			// 检查是否有丢包
 			outputStr := string(output)
 			if strings.Contains(outputStr, "100% packet loss") {
 				c.results[sourceHost.IP].Status = "失败"
-				return fmt.Errorf("host[%d] %s: 100%% packet loss to host %s", 
+				return fmt.Errorf("host[%d] %s: 100%% packet loss to host %s",
 					i, sourceHost.IP, targetHost.IP)
 			}
-			
+
 			// 检查是否有任何丢包
 			if strings.Contains(outputStr, "packet loss") {
 				// 提取丢包率信息进行更详细的检查
@@ -397,16 +501,20 @@ func (c *BasicChecker) checkInterHostConnectivity() error {
 					if strings.Contains(line, "packet loss") && !strings.Contains(line, "0% packet loss") && !strings.Contains(line, "0.0% packet loss") {
 						warning := fmt.Sprintf("主机 %s 到 %s 有丢包: %s", sourceHost.IP, targetHost.IP, strings.TrimSpace(line))
 						c.warnings = append(c.warnings, warning)
-						c.logger.Warnf("Packet loss detected from %s to %s: %s", sourceHost.IP, targetHost.IP, strings.TrimSpace(line))
+						if c.logger != nil {
+							c.logger.Warn("检测到从 %s 到 %s 的丢包: %s", sourceHost.IP, targetHost.IP, strings.TrimSpace(line))
+						}
 						break
 					}
 				}
 			}
-			
-			c.logger.Infof("✓ Host %s can reach %s", sourceHost.IP, targetHost.IP)
+
+			if c.logger != nil {
+				c.logger.Info("✓ 主机 %s 可以达到 %s", sourceHost.IP, targetHost.IP)
+			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -417,8 +525,12 @@ func (c *BasicChecker) buildSSHCommand(host config.Host, command string) *exec.C
 	if host.Password != "" {
 		// 检查 sshpass 是否可用
 		if _, err := exec.LookPath("sshpass"); err != nil {
-			c.logger.Warnf("sshpass not found. Please install sshpass or use SSH key authentication for host %s", host.IP)
-			c.logger.Warnf("Install sshpass: 'brew install hudochenkov/sshpass/sshpass' (macOS) or 'apt-get install sshpass' (Ubuntu)")
+			if c.logger != nil {
+				c.logger.Warn("未找到 sshpass。请为主机 %s 安装 sshpass 或使用 SSH 密钥认证", host.IP)
+			}
+			if c.logger != nil {
+				c.logger.Warn("安装 sshpass: 'brew install hudochenkov/sshpass/sshpass' (macOS) 或 'apt-get install sshpass' (Ubuntu)")
+			}
 			// 尝试使用 expect 或提示用户
 			sshCmd = exec.Command("ssh",
 				"-o", "StrictHostKeyChecking=no",
@@ -466,9 +578,11 @@ func (c *BasicChecker) buildSSHCommand(host config.Host, command string) *exec.C
 
 // printResultsTableAndConfirm 打印基础检测结果表格并确认是否继续
 func (c *BasicChecker) printResultsTableAndConfirm() error {
-	fmt.Println("\n" + strings.Repeat("=", 80))
-	fmt.Println("                    基础系统检查结果")
-	fmt.Println(strings.Repeat("=", 80))
+	if c.logger != nil {
+		c.logger.Info("\n" + strings.Repeat("=", 80))
+		c.logger.Info("                    基础系统检查结果")
+		c.logger.Info(strings.Repeat("=", 80))
+	}
 
 	// 统计信息
 	passed := 0
@@ -484,9 +598,11 @@ func (c *BasicChecker) printResultsTableAndConfirm() error {
 	// 为每个主机打印一个纵向的信息块
 	for i, host := range c.config.Hosts {
 		if i > 0 {
-			fmt.Println() // 主机间空行
+			if c.logger != nil {
+				c.logger.Info("") // 主机间空行
+			}
 		}
-		
+
 		result := c.results[host.IP]
 
 		// 格式化显示
@@ -523,22 +639,26 @@ func (c *BasicChecker) printResultsTableAndConfirm() error {
 		}
 
 		// 打印主机信息块
-		fmt.Printf("┌─ 主机 #%d %s %s\n", i+1, statusIcon, statusStr)
-		fmt.Printf("│  IP地址      : %s\n", result.IP)
-		fmt.Printf("│  角色        : %s\n", roleStr)
-		fmt.Printf("│  操作系统    : %s\n", result.OS)
-		fmt.Printf("│  架构        : %s\n", result.Arch)
-		fmt.Printf("│  内核版本    : %s\n", result.Kernel)
-		fmt.Printf("│  CPU         : %s\n", cpuStr)
-		fmt.Printf("│  内存        : %s\n", memStr)
-		fmt.Printf("│  根分区      : %s\n", rootInfo)
-		fmt.Printf("└" + strings.Repeat("─", 50))
+		if c.logger != nil {
+			c.logger.Info("┌─ 主机 #%d %s %s", i+1, statusIcon, statusStr)
+			c.logger.Info("│  IP地址      : %s", result.IP)
+			c.logger.Info("│  角色        : %s", roleStr)
+			c.logger.Info("│  操作系统    : %s", result.OS)
+			c.logger.Info("│  架构        : %s", result.Arch)
+			c.logger.Info("│  内核版本    : %s", result.Kernel)
+			c.logger.Info("│  CPU         : %s", cpuStr)
+			c.logger.Info("│  内存        : %s", memStr)
+			c.logger.Info("│  根分区      : %s", rootInfo)
+			c.logger.Info("└" + strings.Repeat("─", 50))
+		}
 	}
 
-	fmt.Println("\n" + strings.Repeat("=", 80))
-	fmt.Printf("检查总结: %d 个主机通过检查, %d 个主机检查失败\n", passed, failed)
-	fmt.Println(strings.Repeat("=", 80))
-	
+	if c.logger != nil {
+		c.logger.Info("\n" + strings.Repeat("=", 80))
+		c.logger.Info("检查总结: %d 个主机通过检查, %d 个主机检查失败", passed, failed)
+		c.logger.Info(strings.Repeat("=", 80))
+	}
+
 	// 显示警告信息并询问用户是否继续
 	if len(c.warnings) > 0 {
 		fmt.Printf("\n⚠️  发现以下问题:\n")
@@ -547,21 +667,21 @@ func (c *BasicChecker) printResultsTableAndConfirm() error {
 		}
 		fmt.Printf("\n这些问题可能导致安装失败或运行不稳定。\n")
 		fmt.Printf("是否继续安装? (y/N): ")
-		
+
 		reader := bufio.NewReader(os.Stdin)
 		response, err := reader.ReadString('\n')
 		if err != nil {
 			return fmt.Errorf("无法读取用户输入: %w", err)
 		}
-		
+
 		response = strings.TrimSpace(strings.ToLower(response))
 		if response != "y" && response != "yes" {
 			return fmt.Errorf("用户取消安装")
 		}
-		
+
 		fmt.Printf("继续安装...\n")
 	}
-	
+
 	fmt.Println()
 	return nil
 }

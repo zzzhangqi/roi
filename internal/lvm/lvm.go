@@ -7,12 +7,19 @@ import (
 	"strings"
 
 	"github.com/rainbond/rainbond-offline-installer/pkg/config"
-	"github.com/sirupsen/logrus"
 )
+
+// Logger 定义日志接口
+type Logger interface {
+	Debug(format string, v ...interface{})
+	Info(format string, v ...interface{})
+	Warn(format string, v ...interface{})
+	Error(format string, v ...interface{})
+}
 
 type LVM struct {
 	config *config.Config
-	logger *logrus.Logger
+	logger Logger
 }
 
 type LVMStatus struct {
@@ -48,9 +55,10 @@ type MountInfo struct {
 }
 
 func NewLVM(cfg *config.Config) *LVM {
-	logger := logrus.New()
-	logger.SetLevel(logrus.InfoLevel)
+	return NewLVMWithLogger(cfg, nil)
+}
 
+func NewLVMWithLogger(cfg *config.Config, logger Logger) *LVM {
 	return &LVM{
 		config: cfg,
 		logger: logger,
@@ -59,7 +67,7 @@ func NewLVM(cfg *config.Config) *LVM {
 
 // Show 显示 LVM 状态
 func (l *LVM) Show() error {
-	l.logger.Info("Showing LVM status...")
+	if l.logger != nil { l.logger.Info("Showing LVM status...") }
 
 	hasLVMConfig := false
 	for _, host := range l.config.Hosts {
@@ -70,7 +78,7 @@ func (l *LVM) Show() error {
 	}
 
 	if !hasLVMConfig {
-		l.logger.Info("No LVM configuration found on any host.")
+		if l.logger != nil { l.logger.Info("No LVM configuration found on any host.") }
 		return nil
 	}
 
@@ -89,7 +97,7 @@ func (l *LVM) Show() error {
 			continue
 		}
 
-		l.logger.Infof("Checking LVM tools for host %s...", host.IP)
+		if l.logger != nil { l.logger.Info("Checking LVM tools for host %s...", host.IP) }
 
 		sshCmd := l.buildSSHCommand(host, "which lvm")
 		if err := sshCmd.Run(); err != nil {
@@ -105,7 +113,7 @@ func (l *LVM) Show() error {
 			continue
 		}
 
-		l.logger.Infof("Checking LVM devices for host %s...", host.IP)
+		if l.logger != nil { l.logger.Info("Checking LVM devices for host %s...", host.IP) }
 
 		vgName := host.LVMConfig.VGName
 		if vgName == "" {
@@ -149,7 +157,7 @@ func (l *LVM) Show() error {
 			continue
 		}
 
-		l.logger.Infof("Checking LVM status for host %s...", host.IP)
+		if l.logger != nil { l.logger.Info("Checking LVM status for host %s...", host.IP) }
 
 		vgName := host.LVMConfig.VGName
 		if vgName == "" {
@@ -160,8 +168,8 @@ func (l *LVM) Show() error {
 		sshCmd := l.buildSSHCommand(host, fmt.Sprintf("vgs %s --noheadings --nosuffix --units g", vgName))
 		_, err := sshCmd.Output()
 		if err != nil {
-			l.logger.Warnf("Host %s: Volume group %s not found or not accessible", host.IP, vgName)
-			l.logger.Infof("Host %s: You may need to create the volume group first", host.IP)
+			if l.logger != nil { l.logger.Warn("Host %s: Volume group %s not found or not accessible", host.IP, vgName) }
+			if l.logger != nil { l.logger.Info("Host %s: You may need to create the volume group first", host.IP) }
 			results[host.IP].Status = "Not Created"
 			continue
 		}
@@ -172,11 +180,11 @@ func (l *LVM) Show() error {
 			sshCmd = l.buildSSHCommand(host, fmt.Sprintf("lvs %s/%s --noheadings --nosuffix --units g", vgName, lv.LVName))
 			_, err := sshCmd.Output()
 			if err != nil {
-				l.logger.Warnf("Host %s: Logical volume %s/%s not found", host.IP, vgName, lv.LVName)
-				l.logger.Infof("Host %s: You may need to create the logical volume %s", host.IP, lv.LVName)
+				if l.logger != nil { l.logger.Warn("Host %s: Logical volume %s/%s not found", host.IP, vgName, lv.LVName) }
+				if l.logger != nil { l.logger.Info("Host %s: You may need to create the logical volume %s", host.IP, lv.LVName) }
 				allLVsExist = false
 			} else {
-				l.logger.Infof("Host %s: Logical volume %s/%s exists", host.IP, vgName, lv.LVName)
+				if l.logger != nil { l.logger.Info("Host %s: Logical volume %s/%s exists", host.IP, vgName, lv.LVName) }
 			}
 		}
 
@@ -195,7 +203,7 @@ func (l *LVM) Show() error {
 				results[host.IP].VGSize = fields[5] + "G"
 				results[host.IP].VGUsed = fields[4] + "G"
 			}
-			l.logger.Infof("Host %s: Current volume groups:\n%s", host.IP, string(vgsOutput))
+			if l.logger != nil { l.logger.Info("Host %s: Current volume groups:\n%s", host.IP, string(vgsOutput)) }
 		}
 
 		// 收集逻辑卷详细信息
@@ -250,7 +258,7 @@ func (l *LVM) Show() error {
 		sshCmd = l.buildSSHCommand(host, "df -h | grep -E '(docker|containerd)'")
 		mountOutput, _ := sshCmd.Output()
 		if len(mountOutput) > 0 {
-			l.logger.Infof("Host %s: Mounted volumes:\n%s", host.IP, string(mountOutput))
+			if l.logger != nil { l.logger.Info("Host %s: Mounted volumes:\n%s", host.IP, string(mountOutput)) }
 		}
 	}
 
@@ -260,7 +268,7 @@ func (l *LVM) Show() error {
 
 // Create 创建 LVM 配置
 func (l *LVM) Create() error {
-	l.logger.Info("Creating LVM configuration...")
+	if l.logger != nil { l.logger.Info("Creating LVM configuration...") }
 
 	hasLVMConfig := false
 	for _, host := range l.config.Hosts {
@@ -279,7 +287,7 @@ func (l *LVM) Create() error {
 			continue
 		}
 
-		l.logger.Infof("Creating LVM configuration for host %s...", host.IP)
+		if l.logger != nil { l.logger.Info("Creating LVM configuration for host %s...", host.IP) }
 
 		// 检查 LVM 工具
 		sshCmd := l.buildSSHCommand(host, "which lvm")
@@ -302,38 +310,38 @@ func (l *LVM) Create() error {
 
 		// 创建物理卷
 		for _, device := range host.LVMConfig.PVDevices {
-			l.logger.Infof("Host %s: Creating physical volume on %s", host.IP, device)
+			if l.logger != nil { l.logger.Info("Host %s: Creating physical volume on %s", host.IP, device) }
 			sshCmd = l.buildSSHCommand(host, fmt.Sprintf("pvcreate %s", device))
 			if err := sshCmd.Run(); err != nil {
-				l.logger.Warnf("Host %s: Physical volume %s may already exist", host.IP, device)
+				if l.logger != nil { l.logger.Warn("Host %s: Physical volume %s may already exist", host.IP, device) }
 			}
 		}
 
 		// 创建卷组
-		l.logger.Infof("Host %s: Creating volume group %s", host.IP, vgName)
+		if l.logger != nil { l.logger.Info("Host %s: Creating volume group %s", host.IP, vgName) }
 		deviceList := strings.Join(host.LVMConfig.PVDevices, " ")
 		sshCmd = l.buildSSHCommand(host, fmt.Sprintf("vgcreate %s %s", vgName, deviceList))
 		if err := sshCmd.Run(); err != nil {
-			l.logger.Warnf("Host %s: Volume group %s may already exist", host.IP, vgName)
+			if l.logger != nil { l.logger.Warn("Host %s: Volume group %s may already exist", host.IP, vgName) }
 		}
 
 		// 创建逻辑卷
 		for _, lv := range host.LVMConfig.LVs {
-			l.logger.Infof("Host %s: Creating logical volume %s with size %s", host.IP, lv.LVName, lv.Size)
+			if l.logger != nil { l.logger.Info("Host %s: Creating logical volume %s with size %s", host.IP, lv.LVName, lv.Size) }
 			sshCmd = l.buildSSHCommand(host, fmt.Sprintf("lvcreate -n %s -L %s %s", lv.LVName, lv.Size, vgName))
 			if err := sshCmd.Run(); err != nil {
-				l.logger.Warnf("Host %s: Logical volume %s may already exist", host.IP, lv.LVName)
+				if l.logger != nil { l.logger.Warn("Host %s: Logical volume %s may already exist", host.IP, lv.LVName) }
 			}
 		}
 
 		// 格式化并挂载逻辑卷
 		for _, lv := range host.LVMConfig.LVs {
-			l.logger.Infof("Host %s: Formatting logical volume %s", host.IP, lv.LVName)
+			if l.logger != nil { l.logger.Info("Host %s: Formatting logical volume %s", host.IP, lv.LVName) }
 
 			// 格式化文件系统 (使用 XFS)
 			sshCmd = l.buildSSHCommand(host, fmt.Sprintf("mkfs.xfs /dev/%s/%s", vgName, lv.LVName))
 			if err := sshCmd.Run(); err != nil {
-				l.logger.Warnf("Host %s: Logical volume %s may already be formatted", host.IP, lv.LVName)
+				if l.logger != nil { l.logger.Warn("Host %s: Logical volume %s may already be formatted", host.IP, lv.LVName) }
 			}
 
 			// 创建挂载点
@@ -342,31 +350,31 @@ func (l *LVM) Create() error {
 			sshCmd.Run() // 忽略错误，目录可能已存在
 
 			// 挂载逻辑卷
-			l.logger.Infof("Host %s: Mounting %s to %s", host.IP, lv.LVName, mountPoint)
+			if l.logger != nil { l.logger.Info("Host %s: Mounting %s to %s", host.IP, lv.LVName, mountPoint) }
 			sshCmd = l.buildSSHCommand(host, fmt.Sprintf("mount /dev/%s/%s %s", vgName, lv.LVName, mountPoint))
 			if err := sshCmd.Run(); err != nil {
-				l.logger.Warnf("Host %s: Logical volume %s may already be mounted", host.IP, lv.LVName)
+				if l.logger != nil { l.logger.Warn("Host %s: Logical volume %s may already be mounted", host.IP, lv.LVName) }
 			}
 
 			// 添加到 /etc/fstab（避免重复添加）
-			l.logger.Infof("Host %s: Adding %s to /etc/fstab", host.IP, lv.LVName)
+			if l.logger != nil { l.logger.Info("Host %s: Adding %s to /etc/fstab", host.IP, lv.LVName) }
 			fstabEntry := fmt.Sprintf("/dev/%s/%s %s xfs defaults 0 0", vgName, lv.LVName, mountPoint)
 			sshCmd = l.buildSSHCommand(host, fmt.Sprintf("grep -q '%s' /etc/fstab || echo '%s' >> /etc/fstab", fstabEntry, fstabEntry))
 			if err := sshCmd.Run(); err != nil {
-				l.logger.Warnf("Host %s: Failed to add %s to /etc/fstab", host.IP, lv.LVName)
+				if l.logger != nil { l.logger.Warn("Host %s: Failed to add %s to /etc/fstab", host.IP, lv.LVName) }
 			}
 		}
 
-		l.logger.Infof("Host %s: LVM configuration completed", host.IP)
+		if l.logger != nil { l.logger.Info("Host %s: LVM configuration completed", host.IP) }
 	}
 
-	l.logger.Info("LVM configuration creation completed!")
+	if l.logger != nil { l.logger.Info("LVM configuration creation completed!") }
 	return nil
 }
 
 // ShowAndCreate 合并显示状态和创建配置功能
 func (l *LVM) ShowAndCreate() error {
-	l.logger.Info("显示LVM状态并创建配置...")
+	if l.logger != nil { l.logger.Info("显示LVM状态并创建配置...") }
 
 	hasLVMConfig := false
 	for _, host := range l.config.Hosts {
@@ -377,7 +385,7 @@ func (l *LVM) ShowAndCreate() error {
 	}
 
 	if !hasLVMConfig {
-		l.logger.Info("未在任何主机上找到LVM配置")
+		if l.logger != nil { l.logger.Info("未在任何主机上找到LVM配置") }
 		return nil
 	}
 
@@ -391,17 +399,17 @@ func (l *LVM) ShowAndCreate() error {
 	}
 
 	// 先显示当前状态
-	l.logger.Info("=== 当前LVM状态 ===")
+	if l.logger != nil { l.logger.Info("=== 当前LVM状态 ===") }
 	l.checkCurrentStatus(results)
 
 	// 然后创建配置
-	l.logger.Info("=== 创建LVM配置 ===")
+	if l.logger != nil { l.logger.Info("=== 创建LVM配置 ===") }
 	if err := l.createLVMConfiguration(); err != nil {
 		return err
 	}
 
 	// 最后显示创建后的状态
-	l.logger.Info("=== 最终LVM状态 ===")
+	if l.logger != nil { l.logger.Info("=== 最终LVM状态 ===") }
 	l.checkCurrentStatus(results)
 
 	l.printVerticalResultsTable(results)
@@ -416,7 +424,7 @@ func (l *LVM) checkCurrentStatus(results map[string]*LVMStatus) error {
 			continue
 		}
 
-		l.logger.Infof("Checking LVM tools for host %s...", host.IP)
+		if l.logger != nil { l.logger.Info("Checking LVM tools for host %s...", host.IP) }
 
 		sshCmd := l.buildSSHCommand(host, "which lvm")
 		if err := sshCmd.Run(); err != nil {
@@ -432,7 +440,7 @@ func (l *LVM) checkCurrentStatus(results map[string]*LVMStatus) error {
 			continue
 		}
 
-		l.logger.Infof("Checking LVM devices for host %s...", host.IP)
+		if l.logger != nil { l.logger.Info("Checking LVM devices for host %s...", host.IP) }
 
 		vgName := host.LVMConfig.VGName
 		if vgName == "" {
@@ -476,7 +484,7 @@ func (l *LVM) checkCurrentStatus(results map[string]*LVMStatus) error {
 			continue
 		}
 
-		l.logger.Infof("Checking LVM status for host %s...", host.IP)
+		if l.logger != nil { l.logger.Info("Checking LVM status for host %s...", host.IP) }
 
 		vgName := host.LVMConfig.VGName
 		if vgName == "" {
@@ -487,7 +495,7 @@ func (l *LVM) checkCurrentStatus(results map[string]*LVMStatus) error {
 		sshCmd := l.buildSSHCommand(host, fmt.Sprintf("vgs %s --noheadings --nosuffix --units g", vgName))
 		_, err := sshCmd.Output()
 		if err != nil {
-			l.logger.Warnf("Host %s: Volume group %s not found or not accessible", host.IP, vgName)
+			if l.logger != nil { l.logger.Warn("Host %s: Volume group %s not found or not accessible", host.IP, vgName) }
 			results[host.IP].Status = "Not Created"
 			continue
 		}
@@ -498,10 +506,10 @@ func (l *LVM) checkCurrentStatus(results map[string]*LVMStatus) error {
 			sshCmd = l.buildSSHCommand(host, fmt.Sprintf("lvs %s/%s --noheadings --nosuffix --units g", vgName, lv.LVName))
 			_, err := sshCmd.Output()
 			if err != nil {
-				l.logger.Warnf("Host %s: Logical volume %s/%s not found", host.IP, vgName, lv.LVName)
+				if l.logger != nil { l.logger.Warn("Host %s: Logical volume %s/%s not found", host.IP, vgName, lv.LVName) }
 				allLVsExist = false
 			} else {
-				l.logger.Infof("Host %s: Logical volume %s/%s exists", host.IP, vgName, lv.LVName)
+				if l.logger != nil { l.logger.Info("Host %s: Logical volume %s/%s exists", host.IP, vgName, lv.LVName) }
 			}
 		}
 
@@ -595,7 +603,7 @@ func (l *LVM) createLVMConfiguration() error {
 			continue
 		}
 
-		l.logger.Infof("主机 %s: 开始创建LVM配置...", host.IP)
+		if l.logger != nil { l.logger.Info("主机 %s: 开始创建LVM配置...", host.IP) }
 
 		// 检查 LVM 工具
 		sshCmd := l.buildSSHCommand(host, "which lvm")
@@ -621,22 +629,22 @@ func (l *LVM) createLVMConfiguration() error {
 			// 先检查物理卷是否已存在
 			sshCmd = l.buildSSHCommand(host, fmt.Sprintf("pvs %s --noheadings 2>/dev/null", device))
 			if err := sshCmd.Run(); err == nil {
-				l.logger.Infof("主机 %s: 物理卷 %s 已存在，跳过创建", host.IP, device)
+				if l.logger != nil { l.logger.Info("主机 %s: 物理卷 %s 已存在，跳过创建", host.IP, device) }
 				continue
 			}
 
-			l.logger.Infof("主机 %s: 创建物理卷 %s", host.IP, device)
+			if l.logger != nil { l.logger.Info("主机 %s: 创建物理卷 %s", host.IP, device) }
 			sshCmd = l.buildSSHCommand(host, fmt.Sprintf("pvcreate %s", device))
 			output, err := sshCmd.CombinedOutput()
 			if err != nil {
 				if strings.Contains(string(output), "already a physical volume") {
-					l.logger.Infof("主机 %s: 物理卷 %s 已存在", host.IP, device)
+					if l.logger != nil { l.logger.Info("主机 %s: 物理卷 %s 已存在", host.IP, device) }
 				} else {
 					return fmt.Errorf("主机[%d] %s: 创建物理卷 %s 失败: %v - %s", 
 						i, host.IP, device, err, strings.TrimSpace(string(output)))
 				}
 			} else {
-				l.logger.Infof("主机 %s: 成功创建物理卷 %s", host.IP, device)
+				if l.logger != nil { l.logger.Info("主机 %s: 成功创建物理卷 %s", host.IP, device) }
 			}
 		}
 
@@ -644,21 +652,21 @@ func (l *LVM) createLVMConfiguration() error {
 		// 先检查卷组是否已存在
 		sshCmd = l.buildSSHCommand(host, fmt.Sprintf("vgs %s --noheadings 2>/dev/null", vgName))
 		if err := sshCmd.Run(); err == nil {
-			l.logger.Infof("主机 %s: 卷组 %s 已存在，跳过创建", host.IP, vgName)
+			if l.logger != nil { l.logger.Info("主机 %s: 卷组 %s 已存在，跳过创建", host.IP, vgName) }
 		} else {
-			l.logger.Infof("主机 %s: 创建卷组 %s", host.IP, vgName)
+			if l.logger != nil { l.logger.Info("主机 %s: 创建卷组 %s", host.IP, vgName) }
 			deviceList := strings.Join(host.LVMConfig.PVDevices, " ")
 			sshCmd = l.buildSSHCommand(host, fmt.Sprintf("vgcreate %s %s", vgName, deviceList))
 			output, err := sshCmd.CombinedOutput()
 			if err != nil {
 				if strings.Contains(string(output), "already exists") {
-					l.logger.Infof("主机 %s: 卷组 %s 已存在", host.IP, vgName)
+					if l.logger != nil { l.logger.Info("主机 %s: 卷组 %s 已存在", host.IP, vgName) }
 				} else {
 					return fmt.Errorf("主机[%d] %s: 创建卷组 %s 失败: %v - %s", 
 						i, host.IP, vgName, err, strings.TrimSpace(string(output)))
 				}
 			} else {
-				l.logger.Infof("主机 %s: 成功创建卷组 %s", host.IP, vgName)
+				if l.logger != nil { l.logger.Info("主机 %s: 成功创建卷组 %s", host.IP, vgName) }
 			}
 		}
 
@@ -667,11 +675,11 @@ func (l *LVM) createLVMConfiguration() error {
 			// 先检查逻辑卷是否已存在
 			sshCmd = l.buildSSHCommand(host, fmt.Sprintf("lvs %s/%s --noheadings 2>/dev/null", vgName, lv.LVName))
 			if err := sshCmd.Run(); err == nil {
-				l.logger.Infof("主机 %s: 逻辑卷 %s 已存在，跳过创建", host.IP, lv.LVName)
+				if l.logger != nil { l.logger.Info("主机 %s: 逻辑卷 %s 已存在，跳过创建", host.IP, lv.LVName) }
 				continue
 			}
 
-			l.logger.Infof("主机 %s: 创建逻辑卷 %s，大小 %s", host.IP, lv.LVName, lv.Size)
+			if l.logger != nil { l.logger.Info("主机 %s: 创建逻辑卷 %s，大小 %s", host.IP, lv.LVName, lv.Size) }
 			
 			// 获取可用空间信息
 			sshCmd = l.buildSSHCommand(host, fmt.Sprintf("vgs %s --noheadings --units g --nosuffix -o vg_free", vgName))
@@ -681,7 +689,7 @@ func (l *LVM) createLVMConfiguration() error {
 			}
 			
 			freeSpaceStr := strings.TrimSpace(string(freeOutput))
-			l.logger.Infof("主机 %s: 卷组 %s 可用空间: %s GB", host.IP, vgName, freeSpaceStr)
+			if l.logger != nil { l.logger.Info("主机 %s: 卷组 %s 可用空间: %s GB", host.IP, vgName, freeSpaceStr) }
 			
 			sshCmd = l.buildSSHCommand(host, fmt.Sprintf("lvcreate -n %s -L %s %s", lv.LVName, lv.Size, vgName))
 			output, err := sshCmd.CombinedOutput()
@@ -691,13 +699,13 @@ func (l *LVM) createLVMConfiguration() error {
 					return fmt.Errorf("主机[%d] %s: 创建逻辑卷 %s 失败 - 空间不足。请求大小: %s，可用空间: %s GB。请调整配置文件中的逻辑卷大小", 
 						i, host.IP, lv.LVName, lv.Size, freeSpaceStr)
 				} else if strings.Contains(string(output), "already exists") {
-					l.logger.Infof("主机 %s: 逻辑卷 %s 已存在", host.IP, lv.LVName)
+					if l.logger != nil { l.logger.Info("主机 %s: 逻辑卷 %s 已存在", host.IP, lv.LVName) }
 				} else {
 					return fmt.Errorf("主机[%d] %s: 创建逻辑卷 %s 失败: %v - %s", 
 						i, host.IP, lv.LVName, err, strings.TrimSpace(string(output)))
 				}
 			} else {
-				l.logger.Infof("主机 %s: 成功创建逻辑卷 %s", host.IP, lv.LVName)
+				if l.logger != nil { l.logger.Info("主机 %s: 成功创建逻辑卷 %s", host.IP, lv.LVName) }
 			}
 		}
 
@@ -709,7 +717,7 @@ func (l *LVM) createLVMConfiguration() error {
 			// 检查逻辑卷是否存在
 			sshCmd = l.buildSSHCommand(host, fmt.Sprintf("test -e %s", devicePath))
 			if err := sshCmd.Run(); err != nil {
-				l.logger.Warnf("主机 %s: 逻辑卷设备 %s 不存在，跳过格式化和挂载", host.IP, devicePath)
+				if l.logger != nil { l.logger.Warn("主机 %s: 逻辑卷设备 %s 不存在，跳过格式化和挂载", host.IP, devicePath) }
 				continue
 			}
 
@@ -717,17 +725,17 @@ func (l *LVM) createLVMConfiguration() error {
 			sshCmd = l.buildSSHCommand(host, fmt.Sprintf("blkid %s", devicePath))
 			output, err := sshCmd.Output()
 			if err != nil || !strings.Contains(string(output), "xfs") {
-				l.logger.Infof("主机 %s: 格式化逻辑卷 %s 为XFS文件系统", host.IP, lv.LVName)
+				if l.logger != nil { l.logger.Info("主机 %s: 格式化逻辑卷 %s 为XFS文件系统", host.IP, lv.LVName) }
 				sshCmd = l.buildSSHCommand(host, fmt.Sprintf("mkfs.xfs -f %s", devicePath))
 				output, err := sshCmd.CombinedOutput()
 				if err != nil {
-					l.logger.Warnf("主机 %s: 格式化逻辑卷 %s 失败: %v - %s", 
-						host.IP, lv.LVName, err, strings.TrimSpace(string(output)))
+					if l.logger != nil { l.logger.Warn("主机 %s: 格式化逻辑卷 %s 失败: %v - %s", 
+						host.IP, lv.LVName, err, strings.TrimSpace(string(output))) }
 				} else {
-					l.logger.Infof("主机 %s: 成功格式化逻辑卷 %s", host.IP, lv.LVName)
+					if l.logger != nil { l.logger.Info("主机 %s: 成功格式化逻辑卷 %s", host.IP, lv.LVName) }
 				}
 			} else {
-				l.logger.Infof("主机 %s: 逻辑卷 %s 已格式化为XFS，跳过格式化", host.IP, lv.LVName)
+				if l.logger != nil { l.logger.Info("主机 %s: 逻辑卷 %s 已格式化为XFS，跳过格式化", host.IP, lv.LVName) }
 			}
 
 			// 创建挂载点
@@ -737,17 +745,17 @@ func (l *LVM) createLVMConfiguration() error {
 			// 检查是否已挂载
 			sshCmd = l.buildSSHCommand(host, fmt.Sprintf("mountpoint -q %s", mountPoint))
 			if err := sshCmd.Run(); err == nil {
-				l.logger.Infof("主机 %s: 挂载点 %s 已被挂载，跳过挂载", host.IP, mountPoint)
+				if l.logger != nil { l.logger.Info("主机 %s: 挂载点 %s 已被挂载，跳过挂载", host.IP, mountPoint) }
 			} else {
 				// 挂载逻辑卷
-				l.logger.Infof("主机 %s: 挂载逻辑卷 %s 到 %s", host.IP, lv.LVName, mountPoint)
+				if l.logger != nil { l.logger.Info("主机 %s: 挂载逻辑卷 %s 到 %s", host.IP, lv.LVName, mountPoint) }
 				sshCmd = l.buildSSHCommand(host, fmt.Sprintf("mount %s %s", devicePath, mountPoint))
 				output, err := sshCmd.CombinedOutput()
 				if err != nil {
-					l.logger.Warnf("主机 %s: 挂载逻辑卷 %s 失败: %v - %s", 
-						host.IP, lv.LVName, err, strings.TrimSpace(string(output)))
+					if l.logger != nil { l.logger.Warn("主机 %s: 挂载逻辑卷 %s 失败: %v - %s", 
+						host.IP, lv.LVName, err, strings.TrimSpace(string(output))) }
 				} else {
-					l.logger.Infof("主机 %s: 成功挂载逻辑卷 %s", host.IP, lv.LVName)
+					if l.logger != nil { l.logger.Info("主机 %s: 成功挂载逻辑卷 %s", host.IP, lv.LVName) }
 				}
 			}
 
@@ -755,19 +763,19 @@ func (l *LVM) createLVMConfiguration() error {
 			fstabEntry := fmt.Sprintf("%s %s xfs defaults 0 0", devicePath, mountPoint)
 			sshCmd = l.buildSSHCommand(host, fmt.Sprintf("grep -q '%s' /etc/fstab", fstabEntry))
 			if err := sshCmd.Run(); err != nil {
-				l.logger.Infof("主机 %s: 添加 %s 到 /etc/fstab", host.IP, lv.LVName)
+				if l.logger != nil { l.logger.Info("主机 %s: 添加 %s 到 /etc/fstab", host.IP, lv.LVName) }
 				sshCmd = l.buildSSHCommand(host, fmt.Sprintf("echo '%s' >> /etc/fstab", fstabEntry))
 				if err := sshCmd.Run(); err != nil {
-					l.logger.Warnf("主机 %s: 添加 %s 到 /etc/fstab 失败", host.IP, lv.LVName)
+					if l.logger != nil { l.logger.Warn("主机 %s: 添加 %s 到 /etc/fstab 失败", host.IP, lv.LVName) }
 				} else {
-					l.logger.Infof("主机 %s: 成功添加 %s 到 /etc/fstab", host.IP, lv.LVName)
+					if l.logger != nil { l.logger.Info("主机 %s: 成功添加 %s 到 /etc/fstab", host.IP, lv.LVName) }
 				}
 			} else {
-				l.logger.Infof("主机 %s: %s 已存在于 /etc/fstab 中", host.IP, lv.LVName)
+				if l.logger != nil { l.logger.Info("主机 %s: %s 已存在于 /etc/fstab 中", host.IP, lv.LVName) }
 			}
 		}
 
-		l.logger.Infof("主机 %s: LVM配置完成", host.IP)
+		if l.logger != nil { l.logger.Info("主机 %s: LVM配置完成", host.IP) }
 	}
 
 	return nil
@@ -775,9 +783,9 @@ func (l *LVM) createLVMConfiguration() error {
 
 // printVerticalResultsTable 打印纵向 LVM 状态表格
 func (l *LVM) printVerticalResultsTable(results map[string]*LVMStatus) {
-	fmt.Println("\n" + strings.Repeat("=", 80))
-	fmt.Println("                        LVM 配置结果")
-	fmt.Println(strings.Repeat("=", 80))
+	if l.logger != nil { l.logger.Info("\n" + strings.Repeat("=", 80)) }
+	if l.logger != nil { l.logger.Info("                        LVM 配置结果") }
+	if l.logger != nil { l.logger.Info(strings.Repeat("=", 80)) }
 
 	// 统计信息
 	ready := 0
@@ -788,7 +796,7 @@ func (l *LVM) printVerticalResultsTable(results map[string]*LVMStatus) {
 	// 为每个主机打印一个纵向的信息块
 	for i, host := range l.config.Hosts {
 		if i > 0 {
-			fmt.Println() // 主机间空行
+			if l.logger != nil { l.logger.Info("") } // 主机间空行
 		}
 		
 		result := results[host.IP]
@@ -827,43 +835,43 @@ func (l *LVM) printVerticalResultsTable(results map[string]*LVMStatus) {
 		}
 
 		// 打印主机信息块
-		fmt.Printf("┌─ 主机 #%d %s %s\n", i+1, statusIcon, statusStr)
-		fmt.Printf("│  IP地址        : %s\n", result.IP)
-		fmt.Printf("│  角色          : %s\n", strings.Join(result.Role, ","))
-		fmt.Printf("│  卷组名称      : %s\n", result.VGName)
-		fmt.Printf("│  物理卷设备    : %s\n", pvDevices)
-		fmt.Printf("│  逻辑卷名称    : %s\n", lvNames)
-		fmt.Printf("│  设备信息      : %s\n", result.DeviceInfo)
+		if l.logger != nil { l.logger.Info(fmt.Sprintf("┌─ 主机 #%d %s %s", i+1, statusIcon, statusStr)) }
+		if l.logger != nil { l.logger.Info(fmt.Sprintf("│  IP地址        : %s", result.IP)) }
+		if l.logger != nil { l.logger.Info(fmt.Sprintf("│  角色          : %s", strings.Join(result.Role, ","))) }
+		if l.logger != nil { l.logger.Info(fmt.Sprintf("│  卷组名称      : %s", result.VGName)) }
+		if l.logger != nil { l.logger.Info(fmt.Sprintf("│  物理卷设备    : %s", pvDevices)) }
+		if l.logger != nil { l.logger.Info(fmt.Sprintf("│  逻辑卷名称    : %s", lvNames)) }
+		if l.logger != nil { l.logger.Info(fmt.Sprintf("│  设备信息      : %s", result.DeviceInfo)) }
 		if result.VGSize != "" {
-			fmt.Printf("│  卷组大小      : %s\n", result.VGSize)
-			fmt.Printf("│  已用空间      : %s\n", result.VGUsed)
+			if l.logger != nil { l.logger.Info(fmt.Sprintf("│  卷组大小      : %s", result.VGSize)) }
+			if l.logger != nil { l.logger.Info(fmt.Sprintf("│  已用空间      : %s", result.VGUsed)) }
 		}
 
 		// 显示逻辑卷详细信息
 		if len(result.LVDetails) > 0 {
-			fmt.Printf("│  逻辑卷详情    :\n")
+			if l.logger != nil { l.logger.Info("│  逻辑卷详情    :") }
 			for _, lv := range result.LVDetails {
-				fmt.Printf("│    - %s: %s -> %s (%s)\n", lv.Name, lv.Size, lv.MountPoint, lv.Status)
+				if l.logger != nil { l.logger.Info(fmt.Sprintf("│    - %s: %s -> %s (%s)", lv.Name, lv.Size, lv.MountPoint, lv.Status)) }
 			}
 		}
 
 		// 显示挂载详细信息
 		if len(result.MountInfo) > 0 {
-			fmt.Printf("│  挂载信息      :\n")
+			if l.logger != nil { l.logger.Info("│  挂载信息      :") }
 			for _, mount := range result.MountInfo {
-				fmt.Printf("│    - %s: %s/%s 可用:%s 使用率:%s\n", 
-					mount.MountPoint, mount.Used, mount.Size, mount.Available, mount.Usage)
+				if l.logger != nil { l.logger.Info(fmt.Sprintf("│    - %s: %s/%s 可用:%s 使用率:%s", 
+					mount.MountPoint, mount.Used, mount.Size, mount.Available, mount.Usage)) }
 			}
 		}
 
-		fmt.Printf("└" + strings.Repeat("─", 50))
+		if l.logger != nil { l.logger.Info(fmt.Sprintf("└" + strings.Repeat("─", 50))) }
 	}
 
-	fmt.Println("\n" + strings.Repeat("=", 80))
-	fmt.Printf("配置总结: %d 个主机就绪, %d 个主机部分完成, %d 个主机失败, %d 个主机无配置\n", 
-		ready, partial, failed, noConfig)
-	fmt.Println(strings.Repeat("=", 80))
-	fmt.Println()
+	if l.logger != nil { l.logger.Info("\n" + strings.Repeat("=", 80)) }
+	if l.logger != nil { l.logger.Info(fmt.Sprintf("配置总结: %d 个主机就绪, %d 个主机部分完成, %d 个主机失败, %d 个主机无配置", 
+		ready, partial, failed, noConfig)) }
+	if l.logger != nil { l.logger.Info(strings.Repeat("=", 80)) }
+	if l.logger != nil { l.logger.Info("") }
 }
 
 // buildSSHCommand 构建 SSH 命令
@@ -873,7 +881,7 @@ func (l *LVM) buildSSHCommand(host config.Host, command string) *exec.Cmd {
 	if host.Password != "" {
 		// 检查 sshpass 是否可用
 		if _, err := exec.LookPath("sshpass"); err != nil {
-			l.logger.Warnf("sshpass not found. Please install sshpass or use SSH key authentication for host %s", host.IP)
+			if l.logger != nil { l.logger.Warn("sshpass not found. Please install sshpass or use SSH key authentication for host %s", host.IP) }
 			sshCmd = exec.Command("ssh",
 				"-o", "StrictHostKeyChecking=no",
 				"-o", "UserKnownHostsFile=/dev/null",
@@ -925,14 +933,14 @@ func (l *LVM) getMountPoint(lvName string, configLV *config.LogicalVolume) strin
 
 // printResultsTable 打印 LVM 状态表格
 func (l *LVM) printResultsTable(results map[string]*LVMStatus) {
-	fmt.Println("\n" + strings.Repeat("=", 120))
-	fmt.Println("                               LVM STATUS")
-	fmt.Println(strings.Repeat("=", 120))
+	if l.logger != nil { l.logger.Info("\n" + strings.Repeat("=", 120)) }
+	if l.logger != nil { l.logger.Info("                               LVM STATUS") }
+	if l.logger != nil { l.logger.Info(strings.Repeat("=", 120)) }
 
 	// 表头
-	fmt.Printf("%-15s %-8s %-15s %-30s %-25s %-15s\n",
-		"IP", "Role", "VG Name", "PV Devices", "LV Names", "Device Info")
-	fmt.Println(strings.Repeat("-", 120))
+	if l.logger != nil { l.logger.Info(fmt.Sprintf("%-15s %-8s %-15s %-30s %-25s %-15s",
+		"IP", "Role", "VG Name", "PV Devices", "LV Names", "Device Info")) }
+	if l.logger != nil { l.logger.Info(strings.Repeat("-", 120)) }
 
 	// 数据行
 	for _, host := range l.config.Hosts {
@@ -956,21 +964,21 @@ func (l *LVM) printResultsTable(results map[string]*LVMStatus) {
 			}
 		}
 
-		fmt.Printf("%-15s %-8s %-15s %-30s %-25s %-15s\n",
+		if l.logger != nil { l.logger.Info(fmt.Sprintf("%-15s %-8s %-15s %-30s %-25s %-15s",
 			result.IP,
 			strings.Join(result.Role, ","),
 			result.VGName,
 			pvDevices,
 			lvNames,
-			result.DeviceInfo)
+			result.DeviceInfo)) }
 	}
 
-	fmt.Println(strings.Repeat("=", 120))
+	if l.logger != nil { l.logger.Info(strings.Repeat("=", 120)) }
 
 	// 详细信息表格
-	fmt.Println("\n" + strings.Repeat("=", 120))
-	fmt.Println("                               DETAILED LVM INFORMATION")
-	fmt.Println(strings.Repeat("=", 120))
+	if l.logger != nil { l.logger.Info("\n" + strings.Repeat("=", 120)) }
+	if l.logger != nil { l.logger.Info("                               DETAILED LVM INFORMATION") }
+	if l.logger != nil { l.logger.Info(strings.Repeat("=", 120)) }
 
 	for _, host := range l.config.Hosts {
 		result := results[host.IP]
@@ -978,34 +986,34 @@ func (l *LVM) printResultsTable(results map[string]*LVMStatus) {
 			continue
 		}
 
-		fmt.Printf("\nHost: %s (%s)\n", result.IP, strings.Join(result.Role, ","))
-		fmt.Printf("Volume Group: %s (Size: %s, Used: %s)\n", result.VGName, result.VGSize, result.VGUsed)
-		fmt.Println(strings.Repeat("-", 80))
+		if l.logger != nil { l.logger.Info(fmt.Sprintf("\nHost: %s (%s)", result.IP, strings.Join(result.Role, ","))) }
+		if l.logger != nil { l.logger.Info(fmt.Sprintf("Volume Group: %s (Size: %s, Used: %s)", result.VGName, result.VGSize, result.VGUsed)) }
+		if l.logger != nil { l.logger.Info(strings.Repeat("-", 80)) }
 
 		// 逻辑卷详细信息
 		if len(result.LVDetails) > 0 {
-			fmt.Printf("%-20s %-10s %-15s %-25s %-10s\n",
-				"Logical Volume", "Size", "Mount Point", "Device", "Status")
-			fmt.Println(strings.Repeat("-", 80))
+			if l.logger != nil { l.logger.Info(fmt.Sprintf("%-20s %-10s %-15s %-25s %-10s",
+				"Logical Volume", "Size", "Mount Point", "Device", "Status")) }
+			if l.logger != nil { l.logger.Info(strings.Repeat("-", 80)) }
 			for _, lv := range result.LVDetails {
-				fmt.Printf("%-20s %-10s %-15s %-25s %-10s\n",
-					lv.Name, lv.Size, lv.MountPoint, fmt.Sprintf("/dev/%s/%s", result.VGName, lv.Name), lv.Status)
+				if l.logger != nil { l.logger.Info(fmt.Sprintf("%-20s %-10s %-15s %-25s %-10s",
+					lv.Name, lv.Size, lv.MountPoint, fmt.Sprintf("/dev/%s/%s", result.VGName, lv.Name), lv.Status)) }
 			}
 		}
 
 		// 挂载详细信息
 		if len(result.MountInfo) > 0 {
-			fmt.Printf("\n%-30s %-20s %-10s %-10s %-10s %-10s\n",
-				"Device", "Mount Point", "Size", "Used", "Available", "Usage")
-			fmt.Println(strings.Repeat("-", 90))
+			if l.logger != nil { l.logger.Info(fmt.Sprintf("\n%-30s %-20s %-10s %-10s %-10s %-10s",
+				"Device", "Mount Point", "Size", "Used", "Available", "Usage")) }
+			if l.logger != nil { l.logger.Info(strings.Repeat("-", 90)) }
 			for _, mount := range result.MountInfo {
-				fmt.Printf("%-30s %-20s %-10s %-10s %-10s %-10s\n",
-					mount.Device, mount.MountPoint, mount.Size, mount.Used, mount.Available, mount.Usage)
+				if l.logger != nil { l.logger.Info(fmt.Sprintf("%-30s %-20s %-10s %-10s %-10s %-10s",
+					mount.Device, mount.MountPoint, mount.Size, mount.Used, mount.Available, mount.Usage)) }
 			}
 		}
 	}
 
-	fmt.Println(strings.Repeat("=", 120))
+	if l.logger != nil { l.logger.Info(strings.Repeat("=", 120)) }
 
 	// 统计信息
 	ready := 0
@@ -1025,6 +1033,6 @@ func (l *LVM) printResultsTable(results map[string]*LVMStatus) {
 		}
 	}
 
-	fmt.Printf("Summary: %d ready, %d partial, %d failed, %d no config\n", ready, partial, failed, noConfig)
-	fmt.Println()
+	if l.logger != nil { l.logger.Info(fmt.Sprintf("Summary: %d ready, %d partial, %d failed, %d no config", ready, partial, failed, noConfig)) }
+	if l.logger != nil { l.logger.Info("") }
 }
