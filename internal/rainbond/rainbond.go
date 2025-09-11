@@ -17,10 +17,21 @@ type Logger interface {
 	Error(format string, v ...interface{})
 }
 
+// StepProgress 进度接口
+type StepProgress interface {
+	StartSubSteps(totalSubSteps int)
+	StartSubStep(subStepName string)
+	CompleteSubStep()
+	CompleteSubSteps()
+	StartNodeProcessing(nodeIP string)
+	CompleteNodeStep(nodeIP string)
+}
+
 type RainbondInstaller struct {
-	config     *config.Config
-	logger     Logger
-	chartPath  string
+	config       *config.Config
+	logger       Logger
+	stepProgress StepProgress
+	chartPath    string
 }
 
 func NewRainbondInstaller(cfg *config.Config) *RainbondInstaller {
@@ -28,10 +39,15 @@ func NewRainbondInstaller(cfg *config.Config) *RainbondInstaller {
 }
 
 func NewRainbondInstallerWithLogger(cfg *config.Config, logger Logger) *RainbondInstaller {
+	return NewRainbondInstallerWithLoggerAndProgress(cfg, logger, nil)
+}
+
+func NewRainbondInstallerWithLoggerAndProgress(cfg *config.Config, logger Logger, stepProgress StepProgress) *RainbondInstaller {
 	return &RainbondInstaller{
-		config:    cfg,
-		logger:    logger,
-		chartPath: "./rainbond-chart", // 默认chart路径
+		config:       cfg,
+		logger:       logger,
+		stepProgress: stepProgress,
+		chartPath:    "./rainbond-chart", // 默认chart路径
 	}
 }
 

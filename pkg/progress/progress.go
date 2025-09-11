@@ -372,3 +372,37 @@ func (sp *StepProgress) CompleteSubSteps() {
 		sp.logger.InfoToFileOnly("所有子步骤完成")
 	}
 }
+
+// StartNodeProcessing 开始处理特定节点
+func (sp *StepProgress) StartNodeProcessing(nodeIP string) {
+	if sp.spinner != nil {
+		sp.spinner.Stop() // 停止当前spinner
+	}
+	
+	// 清除当前行并显示正在处理的节点信息
+	fmt.Printf("\r\033[K\033[36m[INFO]\033[0m [\033[33m%s %d/%d\033[0m] 正在部署 \033[35m%s\033[0m 节点", sp.getStagePrefix(), sp.currentStep, sp.totalSteps, nodeIP)
+	
+	// 启动新的spinner，显示正在处理节点
+	sp.spinner = NewSpinner(fmt.Sprintf("\033[36m[INFO]\033[0m [\033[33m%s %d/%d\033[0m] 正在部署 \033[35m%s\033[0m 节点", sp.getStagePrefix(), sp.currentStep, sp.totalSteps, nodeIP))
+	sp.spinner.Start()
+	
+	// 记录到文件
+	if sp.logger != nil {
+		sp.logger.InfoToFileOnly("开始处理节点: %s", nodeIP)
+	}
+}
+
+// CompleteNodeStep 完成特定节点的处理
+func (sp *StepProgress) CompleteNodeStep(nodeIP string) {
+	if sp.spinner != nil {
+		sp.spinner.Stop() // 停止spinner并清除当前行
+	}
+	
+	// 清除当前行并显示节点完成信息
+	fmt.Printf("\r\033[K\033[36m[INFO]\033[0m [\033[32m%s %d/%d\033[0m] 节点 \033[35m%s\033[0m %s。\n", sp.getStagePrefix(), sp.currentStep, sp.totalSteps, nodeIP, sp.getCompleteMessage())
+	
+	// 记录到文件
+	if sp.logger != nil {
+		sp.logger.InfoToFileOnly("节点处理完成: %s - %s", nodeIP, sp.stepName)
+	}
+}

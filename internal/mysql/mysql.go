@@ -311,9 +311,20 @@ type Logger interface {
 	Error(format string, v ...interface{})
 }
 
+// StepProgress 进度接口
+type StepProgress interface {
+	StartSubSteps(totalSubSteps int)
+	StartSubStep(subStepName string)
+	CompleteSubStep()
+	CompleteSubSteps()
+	StartNodeProcessing(nodeIP string)
+	CompleteNodeStep(nodeIP string)
+}
+
 type MySQLInstaller struct {
-	config *config.Config
-	logger Logger
+	config       *config.Config
+	logger       Logger
+	stepProgress StepProgress
 }
 
 func NewMySQLInstaller(cfg *config.Config) *MySQLInstaller {
@@ -321,9 +332,14 @@ func NewMySQLInstaller(cfg *config.Config) *MySQLInstaller {
 }
 
 func NewMySQLInstallerWithLogger(cfg *config.Config, logger Logger) *MySQLInstaller {
+	return NewMySQLInstallerWithLoggerAndProgress(cfg, logger, nil)
+}
+
+func NewMySQLInstallerWithLoggerAndProgress(cfg *config.Config, logger Logger, stepProgress StepProgress) *MySQLInstaller {
 	return &MySQLInstaller{
-		config: cfg,
-		logger: logger,
+		config:       cfg,
+		logger:       logger,
+		stepProgress: stepProgress,
 	}
 }
 

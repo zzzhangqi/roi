@@ -19,6 +19,16 @@ type Logger interface {
 	Error(format string, v ...interface{})
 }
 
+// StepProgress 进度接口
+type StepProgress interface {
+	StartSubSteps(totalSubSteps int)
+	StartSubStep(subStepName string)
+	CompleteSubStep()
+	CompleteSubSteps()
+	StartNodeProcessing(nodeIP string)
+	CompleteNodeStep(nodeIP string)
+}
+
 const (
 	RKE2DefaultToken = "9L1wA2hTP3DmqYf3eDSeWB4J"
 	RKE2ConfigDir    = "/etc/rancher/rke2"
@@ -34,8 +44,9 @@ type FileArtifact struct {
 }
 
 type RKE2Installer struct {
-	config *config.Config
-	logger Logger
+	config       *config.Config
+	logger       Logger
+	stepProgress StepProgress
 }
 
 type RKE2Status struct {
@@ -53,9 +64,14 @@ func NewRKE2Installer(cfg *config.Config) *RKE2Installer {
 }
 
 func NewRKE2InstallerWithLogger(cfg *config.Config, logger Logger) *RKE2Installer {
+	return NewRKE2InstallerWithLoggerAndProgress(cfg, logger, nil)
+}
+
+func NewRKE2InstallerWithLoggerAndProgress(cfg *config.Config, logger Logger, stepProgress StepProgress) *RKE2Installer {
 	return &RKE2Installer{
-		config: cfg,
-		logger: logger,
+		config:       cfg,
+		logger:       logger,
+		stepProgress: stepProgress,
 	}
 }
 
@@ -128,7 +144,7 @@ func (r *RKE2Installer) Run() error {
 		if s.Status == "运行中" {
 			runningCount++
 			installedCount++
-		} else if s.Status == "已安装未运行" {
+		} else if s.Status == "已安装未运行" || s.Status == "服务运行中但节点未就绪" {
 			installedCount++
 		}
 	}
@@ -182,11 +198,17 @@ func (r *RKE2Installer) Run() error {
 	}
 
 	// 步骤1: 安装第一个etcd节点（必须包含etcd）
+	if r.stepProgress != nil {
+		r.stepProgress.StartNodeProcessing(firstEtcdHost.IP)
+	}
 	if r.logger != nil {
 		r.logger.Info("开始安装第一个节点: %s (角色: %s)", firstEtcdHost.IP, firstEtcdHost.Role)
 	}
 	if err := r.installRKE2OnServer(*firstEtcdHost, true); err != nil {
 		return fmt.Errorf("第一个节点 %s RKE2安装失败: %w", firstEtcdHost.IP, err)
+	}
+	if r.stepProgress != nil {
+		r.stepProgress.CompleteNodeStep(firstEtcdHost.IP)
 	}
 
 	// 等待第一个etcd节点启动
@@ -213,11 +235,18 @@ func (r *RKE2Installer) Run() error {
 			continue // 跳过第一个节点
 		}
 		etcdCount++
+		
+		if r.stepProgress != nil {
+			r.stepProgress.StartNodeProcessing(etcdHost.IP)
+		}
 		if r.logger != nil {
 			r.logger.Info("安装etcd节点: %s (角色: %v)", etcdHost.IP, etcdHost.Role)
 		}
 		if err := r.installRKE2OnServer(etcdHost, false); err != nil {
 			return fmt.Errorf("etcd节点 %s RKE2安装失败: %w", etcdHost.IP, err)
+		}
+		if r.stepProgress != nil {
+			r.stepProgress.CompleteNodeStep(etcdHost.IP)
 		}
 		if r.logger != nil {
 			r.logger.Info("etcd节点 %s 安装完成", etcdHost.IP)
@@ -240,11 +269,18 @@ func (r *RKE2Installer) Run() error {
 			continue // 跳过第一个节点（如果它已经是master）
 		}
 		masterCount++
+		
+		if r.stepProgress != nil {
+			r.stepProgress.StartNodeProcessing(masterHost.IP)
+		}
 		if r.logger != nil {
 			r.logger.Info("安装master节点: %s (角色: %s)", masterHost.IP, masterHost.Role)
 		}
 		if err := r.installRKE2OnServer(masterHost, false); err != nil {
 			return fmt.Errorf("master节点 %s RKE2安装失败: %w", masterHost.IP, err)
+		}
+		if r.stepProgress != nil {
+			r.stepProgress.CompleteNodeStep(masterHost.IP)
 		}
 		if r.logger != nil {
 			r.logger.Info("master节点 %s 安装完成", masterHost.IP)
@@ -261,11 +297,17 @@ func (r *RKE2Installer) Run() error {
 		r.logger.Info("开始安装 %d 个worker节点...", len(workerHosts))
 	}
 	for i, workerHost := range workerHosts {
+		if r.stepProgress != nil {
+			r.stepProgress.StartNodeProcessing(workerHost.IP)
+		}
 		if r.logger != nil {
 			r.logger.Info("安装worker节点 %d/%d: %s", i+1, len(workerHosts), workerHost.IP)
 		}
 		if err := r.installRKE2OnAgent(workerHost); err != nil {
 			return fmt.Errorf("worker节点 %s RKE2安装失败: %w", workerHost.IP, err)
+		}
+		if r.stepProgress != nil {
+			r.stepProgress.CompleteNodeStep(workerHost.IP)
 		}
 		if r.logger != nil {
 			r.logger.Info("worker节点 %s 安装完成", workerHost.IP)
@@ -1125,16 +1167,89 @@ func (r *RKE2Installer) getNodeConfigSection(host config.Host) string {
 		configLines = append(configLines, fmt.Sprintf("node-external-ip: %s", host.IP))
 	}
 
-	// node-taint 配置污点
-	if len(host.NodeTaint) > 0 {
-		configLines = append(configLines, "# 节点污点配置")
+	// node-taint 配置污点 - 智能调度策略
+	taints := r.getRecommendedTaints(host)
+	if len(taints) > 0 {
+		configLines = append(configLines, "# 节点污点配置 - 智能调度策略")
 		configLines = append(configLines, "node-taint:")
-		for _, taint := range host.NodeTaint {
+		for _, taint := range taints {
 			configLines = append(configLines, fmt.Sprintf("  - \"%s\"", taint))
 		}
 	}
 
 	return strings.Join(configLines, "\n")
+}
+
+// getRecommendedTaints 根据集群组成和节点角色推荐合适的污点配置
+func (r *RKE2Installer) getRecommendedTaints(host config.Host) []string {
+	roles := r.normalizeRoles(host.Role)
+	isControlPlane := r.hasRole(roles, "etcd") || r.hasRole(roles, "master")
+	
+	// 如果用户明确配置了NodeTaint，先检查是否可能导致问题
+	if len(host.NodeTaint) > 0 {
+		if r.logger != nil {
+			r.logger.Info("主机 %s: 检测到用户配置的污点: %v", host.IP, host.NodeTaint)
+		}
+		
+		// 检查是否使用了可能导致系统组件调度问题的污点
+		for _, taint := range host.NodeTaint {
+			if strings.Contains(taint, ":NoSchedule") && isControlPlane {
+				hasWorkers := r.hasWorkerNodes()
+				if !hasWorkers {
+					if r.logger != nil {
+						r.logger.Warn("主机 %s: 检测到NoSchedule污点但集群中没有worker节点，这可能导致系统组件无法调度", host.IP)
+						r.logger.Warn("建议: 在只有master/etcd节点的集群中，建议使用PreferNoSchedule或标准的control-plane污点")
+					}
+				}
+			}
+		}
+		
+		// 使用用户配置的污点
+		return host.NodeTaint
+	}
+	
+	// 如果没有用户配置的污点，根据集群组成自动推荐
+	if !isControlPlane {
+		// 非控制平面节点不需要污点
+		return []string{}
+	}
+	
+	hasWorkers := r.hasWorkerNodes()
+	var recommendedTaints []string
+	
+	if hasWorkers {
+		// 有worker节点的情况：使用标准的control-plane污点
+		// 这个污点被大多数系统组件的tolerations支持
+		recommendedTaints = []string{
+			"node-role.kubernetes.io/control-plane:NoSchedule",
+		}
+		if r.logger != nil {
+			r.logger.Info("主机 %s: 集群有worker节点，为控制平面节点配置标准污点以避免业务负载调度", host.IP)
+		}
+	} else {
+		// 只有控制平面节点的情况：使用更宽松的策略
+		// 使用PreferNoSchedule允许必要时调度到控制平面节点
+		recommendedTaints = []string{
+			"node-role.kubernetes.io/control-plane:PreferNoSchedule",
+		}
+		if r.logger != nil {
+			r.logger.Info("主机 %s: 集群只有控制平面节点，使用PreferNoSchedule策略以确保系统组件能够正常调度", host.IP)
+		}
+	}
+	
+	return recommendedTaints
+}
+
+// hasWorkerNodes 检查集群中是否有worker节点
+func (r *RKE2Installer) hasWorkerNodes() bool {
+	for _, host := range r.config.Hosts {
+		roles := r.normalizeRoles(host.Role)
+		// 如果有纯worker角色的节点，或者有包含worker但不包含etcd/master的节点
+		if r.hasRole(roles, "worker") && !r.hasRole(roles, "etcd") && !r.hasRole(roles, "master") {
+			return true
+		}
+	}
+	return false
 }
 
 // createRKE2Config 创建RKE2配置文件
@@ -1514,7 +1629,12 @@ func (r *RKE2Installer) checkRKE2Status() map[string]*RKE2Status {
 		sshCmd := r.buildSSHCommand(host, fmt.Sprintf("systemctl is-active %s", serviceName))
 		if err := sshCmd.Run(); err == nil {
 			status.Running = true
-			status.Status = "运行中"
+			// 进一步检查Kubernetes节点是否就绪
+			if r.checkKubernetesNodeReady(host) {
+				status.Status = "运行中"
+			} else {
+				status.Status = "服务运行中但节点未就绪"
+			}
 		} else {
 			status.Running = false
 			status.Status = "已安装未运行"
@@ -1524,6 +1644,37 @@ func (r *RKE2Installer) checkRKE2Status() map[string]*RKE2Status {
 	}
 
 	return results
+}
+
+// checkKubernetesNodeReady 检查Kubernetes节点是否就绪
+func (r *RKE2Installer) checkKubernetesNodeReady(host config.Host) bool {
+	// 从第一个server节点执行kubectl命令检查节点状态
+	firstServer := r.getFirstEtcdHost()
+	if firstServer == nil {
+		if r.logger != nil {
+			r.logger.Debug("找不到第一个server节点，无法检查Kubernetes节点状态")
+		}
+		return false
+	}
+
+	// 使用kubectl检查特定节点是否就绪
+	kubectlCmd := fmt.Sprintf("kubectl get node %s -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null || echo 'NotFound'", host.IP)
+	sshCmd := r.buildSSHCommand(*firstServer, kubectlCmd)
+	output, err := sshCmd.Output()
+	if err != nil {
+		if r.logger != nil {
+			r.logger.Debug("检查节点 %s 的Kubernetes状态失败: %v", host.IP, err)
+		}
+		return false
+	}
+
+	nodeStatus := strings.TrimSpace(string(output))
+	if r.logger != nil {
+		r.logger.Debug("节点 %s 的Kubernetes就绪状态: %s", host.IP, nodeStatus)
+	}
+	
+	// 如果节点状态是"True"，表示节点就绪
+	return nodeStatus == "True"
 }
 
 // printRKE2Status 打印RKE2状态到文件，不干扰控制台进度
@@ -1540,6 +1691,7 @@ func (r *RKE2Installer) printRKE2Status(status map[string]*RKE2Status) {
 
 	// 统计信息
 	running := 0
+	serviceRunning := 0
 	servers := 0
 	agents := 0
 	total := 0
@@ -1558,12 +1710,16 @@ func (r *RKE2Installer) printRKE2Status(status map[string]*RKE2Status) {
 
 		total++
 
-		// 状态图标
+		// 状态图标和运行状态统计
 		statusIcon := "✓"
-		if !result.Running {
-			statusIcon = "✗"
-		} else {
+		if result.Status == "运行中" {
+			statusIcon = "✓"
 			running++
+		} else if result.Status == "服务运行中但节点未就绪" {
+			statusIcon = "⚠"
+			serviceRunning++
+		} else {
+			statusIcon = "✗"
 		}
 
 		if result.IsServer {
@@ -1611,9 +1767,27 @@ func (r *RKE2Installer) printRKE2Status(status map[string]*RKE2Status) {
 	if r.logger != nil {
 		r.logger.Debug("\n" + strings.Repeat("=", 80))
 	}
+	// 构建状态总结信息
+	var statusSummary []string
+	if running > 0 {
+		statusSummary = append(statusSummary, fmt.Sprintf("%d个节点就绪", running))
+	}
+	if serviceRunning > 0 {
+		statusSummary = append(statusSummary, fmt.Sprintf("%d个节点服务运行中但未就绪", serviceRunning))
+	}
+	failed := total - running - serviceRunning
+	if failed > 0 {
+		statusSummary = append(statusSummary, fmt.Sprintf("%d个节点有问题", failed))
+	}
+	
+	statusText := strings.Join(statusSummary, ", ")
+	if statusText == "" {
+		statusText = "无节点状态信息"
+	}
+	
 	if r.logger != nil {
-		r.logger.Debug(fmt.Sprintf("集群总结: %d/%d个RKE2节点运行中, %d个Server节点, %d个Agent节点",
-			running, total, servers, agents))
+		r.logger.Debug(fmt.Sprintf("集群总结: %s（共%d个节点: %d个Server, %d个Agent）",
+			statusText, total, servers, agents))
 	}
 	if r.logger != nil {
 		r.logger.Debug(strings.Repeat("=", 80))

@@ -16,9 +16,20 @@ type Logger interface {
 	Error(format string, v ...interface{})
 }
 
+// StepProgress 进度接口
+type StepProgress interface {
+	StartSubSteps(totalSubSteps int)
+	StartSubStep(subStepName string)
+	CompleteSubStep()
+	CompleteSubSteps()
+	StartNodeProcessing(nodeIP string)
+	CompleteNodeStep(nodeIP string)
+}
+
 type SystemOptimizer struct {
-	config *config.Config
-	logger Logger
+	config       *config.Config
+	logger       Logger
+	stepProgress StepProgress
 }
 
 func NewSystemOptimizer(cfg *config.Config) *SystemOptimizer {
@@ -26,9 +37,14 @@ func NewSystemOptimizer(cfg *config.Config) *SystemOptimizer {
 }
 
 func NewSystemOptimizerWithLogger(cfg *config.Config, logger Logger) *SystemOptimizer {
+	return NewSystemOptimizerWithLoggerAndProgress(cfg, logger, nil)
+}
+
+func NewSystemOptimizerWithLoggerAndProgress(cfg *config.Config, logger Logger, stepProgress StepProgress) *SystemOptimizer {
 	return &SystemOptimizer{
-		config: cfg,
-		logger: logger,
+		config:       cfg,
+		logger:       logger,
+		stepProgress: stepProgress,
 	}
 }
 
@@ -37,60 +53,75 @@ func (o *SystemOptimizer) Run() error {
 		o.logger.Info("开始系统优化...")
 	}
 
-	for i, host := range o.config.Hosts {
-		if o.logger != nil {
-			o.logger.Info("主机 %s: 开始系统优化...", host.IP)
+	// 对每个节点进行逐个优化
+	for _, host := range o.config.Hosts {
+		// 开始处理当前节点
+		if o.stepProgress != nil {
+			o.stepProgress.StartNodeProcessing(host.IP)
 		}
 
-		// 检查是否为 root 用户
-		if err := o.checkRootUser(host); err != nil {
-			return fmt.Errorf("主机[%d] %s: %w", i, host.IP, err)
-		}
-
-		// 执行优化步骤
-		if err := o.disableFirewalld(host); err != nil {
+		// 执行单个节点的优化
+		if err := o.optimizeSingleHost(host); err != nil {
 			if o.logger != nil {
-				o.logger.Warn("主机 %s: 禁用防火墙服务失败: %v", host.IP, err)
+				o.logger.Error("节点 %s 系统优化失败: %v", host.IP, err)
 			}
+			return fmt.Errorf("节点 %s 系统优化失败: %w", host.IP, err)
 		}
 
-		if err := o.disableUFW(host); err != nil {
-			if o.logger != nil {
-				o.logger.Warn("主机 %s: 禁用UFW防火墙失败: %v", host.IP, err)
-			}
-		}
-
-		if err := o.disableSELinux(host); err != nil {
-			if o.logger != nil {
-				o.logger.Warn("主机 %s: 禁用SELinux失败: %v", host.IP, err)
-			}
-		}
-
-		if err := o.disableSwap(host); err != nil {
-			if o.logger != nil {
-				o.logger.Warn("主机 %s: 禁用交换分区失败: %v", host.IP, err)
-			}
-		}
-
-		if err := o.optimizeKernelParameters(host); err != nil {
-			if o.logger != nil {
-				o.logger.Warn("主机 %s: 优化内核参数失败: %v", host.IP, err)
-			}
-		}
-
-		if err := o.optimizeSystemLimits(host); err != nil {
-			if o.logger != nil {
-				o.logger.Warn("主机 %s: 优化系统限制失败: %v", host.IP, err)
-			}
-		}
-
-		if o.logger != nil {
-			o.logger.Info("主机 %s: 系统优化完成", host.IP)
+		// 完成当前节点的优化
+		if o.stepProgress != nil {
+			o.stepProgress.CompleteNodeStep(host.IP)
 		}
 	}
 
 	if o.logger != nil {
 		o.logger.Info("系统优化全部完成!")
+	}
+	return nil
+}
+
+// optimizeSingleHost 对单个主机进行系统优化
+func (o *SystemOptimizer) optimizeSingleHost(host config.Host) error {
+	if o.logger != nil {
+		o.logger.Debug("主机 %s: 开始系统优化...", host.IP)
+	}
+
+	// 检查是否为 root 用户
+	if err := o.checkRootUser(host); err != nil {
+		return fmt.Errorf("root用户检查失败: %w", err)
+	}
+
+	// 执行优化步骤
+	optimizeFuncs := []struct {
+		name string
+		fn   func(config.Host) error
+	}{
+		{"禁用防火墙服务", o.disableFirewalld},
+		{"禁用UFW防火墙", o.disableUFW},
+		{"禁用SELinux", o.disableSELinux},
+		{"禁用交换分区", o.disableSwap},
+		{"优化内核参数", o.optimizeKernelParameters},
+		{"优化系统限制", o.optimizeSystemLimits},
+	}
+
+	for _, opt := range optimizeFuncs {
+		if o.logger != nil {
+			o.logger.Debug("主机 %s: %s...", host.IP, opt.name)
+		}
+
+		if err := opt.fn(host); err != nil {
+			if o.logger != nil {
+				o.logger.Warn("主机 %s: %s失败: %v", host.IP, opt.name, err)
+			}
+		} else {
+			if o.logger != nil {
+				o.logger.Debug("主机 %s: %s成功", host.IP, opt.name)
+			}
+		}
+	}
+
+	if o.logger != nil {
+		o.logger.Debug("主机 %s: 系统优化完成", host.IP)
 	}
 	return nil
 }

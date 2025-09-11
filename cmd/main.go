@@ -114,7 +114,7 @@ var installCmd = &cobra.Command{
 		}
 
 		// Default: full installation - execute all stages in order
-		fmt.Println("\033[36m[信息]\033[0m 欢迎使用 Rainbond 命令行安装工具！")
+		fmt.Println("\033[36m[INFO]\033[0m 欢迎使用 Rainbond 命令行安装工具！")
 
 		// 初始化日志记录器，详细日志记录到文件，控制台只显示进度和错误
 		appLogger, err := logger.NewProgressLogger() // 控制台只显示ERROR，文件记录所有DEBUG信息
@@ -296,14 +296,14 @@ func runLVMWithLogger(cfg *config.Config, logger *logger.Logger, stepProgress *p
 func runRKE2WithLogger(cfg *config.Config, logger *logger.Logger, stepProgress *progress.StepProgress) error {
 	logger.Info("RKE2安装: 开始Kubernetes集群部署")
 	stepProgress.UpdateStepProgress("安装RKE2 Kubernetes集群...")
-	rke2Installer := rke2.NewRKE2InstallerWithLogger(cfg, logger)
+	rke2Installer := rke2.NewRKE2InstallerWithLoggerAndProgress(cfg, logger, stepProgress)
 	return rke2Installer.Run()
 }
 
 func runOptimizeWithLogger(cfg *config.Config, logger *logger.Logger, stepProgress *progress.StepProgress) error {
 	logger.Info("系统优化: 优化容器环境配置")
 	stepProgress.UpdateStepProgress("优化系统配置...")
-	optimizer := optimize.NewSystemOptimizerWithLogger(cfg, logger)
+	optimizer := optimize.NewSystemOptimizerWithLoggerAndProgress(cfg, logger, stepProgress)
 	return optimizer.Run()
 }
 
@@ -328,14 +328,14 @@ func runMySQLWithLogger(cfg *config.Config, logger *logger.Logger, stepProgress 
 		return nil
 	}
 
-	mysqlInstaller := mysql.NewMySQLInstallerWithLogger(cfg, logger)
+	mysqlInstaller := mysql.NewMySQLInstallerWithLoggerAndProgress(cfg, logger, stepProgress)
 	return mysqlInstaller.Run()
 }
 
 func runRainbondWithLogger(cfg *config.Config, logger *logger.Logger, stepProgress *progress.StepProgress) error {
 	logger.Info("Rainbond安装: 部署Rainbond应用管理平台")
 	stepProgress.UpdateStepProgress("安装Rainbond平台...")
-	rainbondInstaller := rainbond.NewRainbondInstallerWithLogger(cfg, logger)
+	rainbondInstaller := rainbond.NewRainbondInstallerWithLoggerAndProgress(cfg, logger, stepProgress)
 	return rainbondInstaller.Run()
 }
 
