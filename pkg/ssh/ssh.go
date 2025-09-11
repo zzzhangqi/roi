@@ -1,7 +1,6 @@
 package ssh
 
 import (
-	"bufio"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -9,9 +8,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/term"
 	"github.com/rainbond/rainbond-offline-installer/pkg/config"
 )
 
@@ -157,15 +158,26 @@ func TestSSHConnection(host config.Host) error {
 
 // PromptForPassword 提示用户输入密码
 func PromptForPassword(host config.Host) (string, error) {
-	reader := bufio.NewReader(os.Stdin)
 	fmt.Printf("请输入主机 %s (%s@%s) 的密码: ", host.IP, host.User, host.IP)
 	
-	password, err := reader.ReadString('\n')
+	password, err := term.ReadPassword(int(syscall.Stdin))
 	if err != nil {
 		return "", fmt.Errorf("读取密码失败: %w", err)
 	}
+	fmt.Println() // 换行，因为ReadPassword不会自动换行
 	
-	return strings.TrimSpace(password), nil
+	return strings.TrimSpace(string(password)), nil
+}
+
+// PromptForPasswordSilent 提示用户输入密码（隐藏输入）
+func PromptForPasswordSilent() (string, error) {
+	password, err := term.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		return "", fmt.Errorf("读取密码失败: %w", err)
+	}
+	fmt.Println() // 换行，因为ReadPassword不会自动换行
+	
+	return strings.TrimSpace(string(password)), nil
 }
 
 // SetupSSHMethod 表示SSH设置方法
@@ -195,8 +207,20 @@ func SetupSSHForHosts(hosts []config.Host, options SSHSetupOptions) (*SSHKeyPair
 
 	// 2. 为每个主机配置SSH免密登录
 	var globalPassword string
-	if options.UnifiedPassword && options.Password != "" {
-		globalPassword = options.Password
+	if options.UnifiedPassword {
+		// 对于统一密码模式，询问一次密码用于所有主机
+		if options.Password != "" {
+			globalPassword = options.Password
+		} else {
+			// 提示用户输入统一密码
+			fmt.Printf("请输入所有主机的统一密码: ")
+			password, err := PromptForPasswordSilent()
+			if err != nil {
+				return nil, fmt.Errorf("获取统一密码失败: %w", err)
+			}
+			globalPassword = password
+		}
+		fmt.Printf("将使用统一密码配置 %d 台主机\n\n", len(hosts))
 	}
 
 	for _, host := range hosts {
@@ -209,7 +233,18 @@ func SetupSSHForHosts(hosts []config.Host, options SSHSetupOptions) (*SSHKeyPair
 		var err error
 		switch options.Method {
 		case MethodSSHCopyID:
-			err = CopySSHKeyWithSSHCopyID(keyPair, host)
+			if globalPassword != "" {
+				// 如果有统一密码，使用expect方法（如果可用）
+				if _, expectErr := exec.LookPath("expect"); expectErr == nil {
+					err = CopySSHKeyWithExpect(keyPair, host, globalPassword)
+				} else {
+					// expect不可用时，提示用户手动输入（保持原有行为）
+					fmt.Printf("注意: 统一密码模式需要expect工具，当前使用交互式ssh-copy-id\n")
+					err = CopySSHKeyWithSSHCopyID(keyPair, host)
+				}
+			} else {
+				err = CopySSHKeyWithSSHCopyID(keyPair, host)
+			}
 		case MethodExpect:
 			password := globalPassword
 			if password == "" {

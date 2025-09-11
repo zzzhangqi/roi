@@ -368,7 +368,7 @@ SSH Methods:
 
 Usage examples:
   roi ssh-setup                           # Auto-detect and interactive mode
-  roi ssh-setup --unified-password        # Batch mode with auto-detection
+  roi ssh-setup --unified-password        # Use same password for all hosts
   roi ssh-setup --method=expect           # Use expect scripts
   roi ssh-setup --method=native-go        # Use Go native SSH client
   roi ssh-setup --force-generate          # Generate new SSH key pair first
@@ -378,8 +378,10 @@ The command will:
 2. Copy public key to each host using selected method
 3. Test SSH connection to verify passwordless access works
 
-Note: Some methods require password input. You'll need to manually update your config 
-file with the SSH key path after successful setup.`,
+Note: 
+- With --unified-password: You'll be prompted once for password to use on all hosts
+- Without --unified-password: You'll be prompted for each host individually
+- You'll need to manually update your config file with the SSH key path after setup`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		configFile := cfgFile
 		if configFile == "" {
