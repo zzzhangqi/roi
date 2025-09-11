@@ -5,8 +5,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 	"github.com/rainbond/rainbond-offline-installer/internal/check"
 	"github.com/rainbond/rainbond-offline-installer/internal/lvm"
 	"github.com/rainbond/rainbond-offline-installer/internal/mysql"
@@ -16,6 +14,8 @@ import (
 	"github.com/rainbond/rainbond-offline-installer/pkg/config"
 	"github.com/rainbond/rainbond-offline-installer/pkg/logger"
 	"github.com/rainbond/rainbond-offline-installer/pkg/progress"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 var (
@@ -24,12 +24,12 @@ var (
 )
 
 var (
-	checkFlag     bool
-	lvmFlag       bool
-	optimizeFlag  bool
-	rke2Flag      bool
-	mysqlFlag     bool
-	rainbondFlag  bool
+	checkFlag    bool
+	lvmFlag      bool
+	optimizeFlag bool
+	rke2Flag     bool
+	mysqlFlag    bool
+	rainbondFlag bool
 )
 
 var rootCmd = &cobra.Command{
@@ -114,10 +114,8 @@ var installCmd = &cobra.Command{
 		}
 
 		// Default: full installation - execute all stages in order
-		fmt.Println("# 安装工具启动")
 		fmt.Println("\033[36m[信息]\033[0m 欢迎使用 Rainbond 命令行安装工具！")
-		fmt.Println("\033[36m[信息]\033[0m 正在初始化安装环境...")
-		
+
 		// 初始化日志记录器，详细日志记录到文件，控制台只显示进度和错误
 		appLogger, err := logger.NewProgressLogger() // 控制台只显示ERROR，文件记录所有DEBUG信息
 		if err != nil {
@@ -127,7 +125,7 @@ var installCmd = &cobra.Command{
 
 		// 初始化步骤进度显示器，集成logger
 		stepProgress := progress.NewStepProgressWithLogger(6, appLogger)
-		
+
 		// 设置主机IP列表
 		var hostIPs []string
 		for _, host := range cfg.Hosts {
@@ -213,18 +211,24 @@ var installCmd = &cobra.Command{
 
 		// 完成所有步骤，重新启用控制台输出
 		stepProgress.Finish()
-		
+
 		// 显示安装成功总结
-		fmt.Println("\n# 安装成功总结")
 		fmt.Println("=====================================================")
-		fmt.Println("\033[32m Rainbond 安装成功！\033[0m")
-		fmt.Println("=====================================================")
-		fmt.Println("访问地址: http://<你的IP地址>:7070")
-		fmt.Println("用户名: admin")
-		fmt.Println("密码: <你的初始密码>")
+		fmt.Println("\033[32m 🎉 Rainbond 安装成功！🎉 \033[0m")
+
+		// 获取第一个主机的IP作为访问地址
+		var accessIP string
+		if len(cfg.Hosts) > 0 {
+			accessIP = cfg.Hosts[0].IP
+		} else {
+			accessIP = "<未配置主机IP>"
+		}
+
+		fmt.Printf("\033[32m 访问地址: http://%s:7070 \033[0m\n", accessIP)
 		fmt.Println("")
 		fmt.Printf("详细日志文件: %s\n", appLogger.GetLogFilePath())
-		fmt.Println("感谢使用 Rainbond！")
+		fmt.Println("\033[32m 🙏 感谢使用 Rainbond！ 🙏\033[0m")
+		fmt.Println("=====================================================")
 		return nil
 	},
 }
@@ -270,7 +274,7 @@ func runCheckWithLogger(cfg *config.Config, logger *logger.Logger, stepProgress 
 func runLVMWithLogger(cfg *config.Config, logger *logger.Logger, stepProgress *progress.StepProgress) error {
 	logger.Info("LVM配置: 检查并配置逻辑卷管理")
 	stepProgress.UpdateStepProgress("配置LVM逻辑卷...")
-	
+
 	// 检查是否有LVM配置
 	hasLVMConfig := false
 	for _, host := range cfg.Hosts {
@@ -279,12 +283,12 @@ func runLVMWithLogger(cfg *config.Config, logger *logger.Logger, stepProgress *p
 			break
 		}
 	}
-	
+
 	if !hasLVMConfig {
 		stepProgress.SkipStep("未找到 LVM 配置")
 		return nil
 	}
-	
+
 	lvmManager := lvm.NewLVMWithLogger(cfg, logger)
 	return lvmManager.ShowAndCreate()
 }
@@ -306,7 +310,7 @@ func runOptimizeWithLogger(cfg *config.Config, logger *logger.Logger, stepProgre
 func runMySQLWithLogger(cfg *config.Config, logger *logger.Logger, stepProgress *progress.StepProgress) error {
 	logger.Info("MySQL安装: 部署MySQL主从集群")
 	stepProgress.UpdateStepProgress("安装MySQL数据库...")
-	
+
 	// 检查是否有MySQL配置或MySQL节点
 	hasMySQLConfig := cfg.MySQL.Enabled
 	if !hasMySQLConfig {
@@ -318,12 +322,12 @@ func runMySQLWithLogger(cfg *config.Config, logger *logger.Logger, stepProgress 
 			}
 		}
 	}
-	
+
 	if !hasMySQLConfig {
 		stepProgress.SkipStep("未找到 MySQL 配置或 MySQL 节点")
 		return nil
 	}
-	
+
 	mysqlInstaller := mysql.NewMySQLInstallerWithLogger(cfg, logger)
 	return mysqlInstaller.Run()
 }
