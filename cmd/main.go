@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rainbond/rainbond-offline-installer/internal/check"
@@ -14,6 +15,7 @@ import (
 	"github.com/rainbond/rainbond-offline-installer/pkg/config"
 	"github.com/rainbond/rainbond-offline-installer/pkg/logger"
 	"github.com/rainbond/rainbond-offline-installer/pkg/progress"
+	"github.com/rainbond/rainbond-offline-installer/pkg/ssh"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -30,6 +32,12 @@ var (
 	rke2Flag     bool
 	mysqlFlag    bool
 	rainbondFlag bool
+)
+
+var (
+	sshUnifiedPassword bool
+	sshForceGenerate   bool
+	sshMethod          string
 )
 
 var rootCmd = &cobra.Command{
@@ -339,6 +347,123 @@ func runRainbondWithLogger(cfg *config.Config, logger *logger.Logger, stepProgre
 	return rainbondInstaller.Run()
 }
 
+var sshSetupCmd = &cobra.Command{
+	Use:   "ssh-setup",
+	Short: "Configure SSH passwordless access for all hosts",
+	Long: `Configure SSH passwordless access to all hosts defined in the configuration file.
+	
+This command helps you set up SSH key-based authentication to avoid password prompts 
+during cluster installation. It supports multiple methods for different environments.
+
+Options:
+  --unified-password  Batch mode - configure all hosts sequentially
+  --force-generate    Force generate new SSH key pair even if one exists
+  --method           SSH setup method: auto, ssh-copy-id, expect, native-go
+
+SSH Methods:
+  auto        Auto-detect best method (default)
+  ssh-copy-id Standard ssh-copy-id tool (interactive password input)
+  expect      Automated using expect scripts (requires expect to be installed)
+  native-go   Go native SSH client (requires password parameter)
+
+Usage examples:
+  roi ssh-setup                           # Auto-detect and interactive mode
+  roi ssh-setup --unified-password        # Batch mode with auto-detection
+  roi ssh-setup --method=expect           # Use expect scripts
+  roi ssh-setup --method=native-go        # Use Go native SSH client
+  roi ssh-setup --force-generate          # Generate new SSH key pair first
+
+The command will:
+1. Generate SSH key pair (id_rsa) if public key doesn't exist (or --force-generate is used)
+2. Copy public key to each host using selected method
+3. Test SSH connection to verify passwordless access works
+
+Note: Some methods require password input. You'll need to manually update your config 
+file with the SSH key path after successful setup.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		configFile := cfgFile
+		if configFile == "" {
+			configFile = viper.ConfigFileUsed()
+			if configFile == "" {
+				return fmt.Errorf("config file not found. Please specify with --config flag or create ./config.yaml")
+			}
+		}
+
+		cfg, err := config.LoadConfig(configFile)
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		return runSSHSetup(cfg, configFile)
+	},
+}
+
+func runSSHSetup(cfg *config.Config, configFile string) error {
+	fmt.Println("🔑 SSH免密配置工具")
+	fmt.Println(strings.Repeat("=", 50))
+	
+	if len(cfg.Hosts) == 0 {
+		return fmt.Errorf("配置文件中未找到主机列表")
+	}
+	
+	fmt.Printf("发现 %d 台主机需要配置SSH免密:\n", len(cfg.Hosts))
+	for i, host := range cfg.Hosts {
+		fmt.Printf("  %d. %s (%s@%s)\n", i+1, host.IP, host.User, host.IP)
+	}
+	fmt.Println()
+	
+	// 根据用户选择或自动检测SSH设置方法
+	var method ssh.SetupSSHMethod
+	var methodName string
+	
+	switch strings.ToLower(sshMethod) {
+	case "ssh-copy-id":
+		method = ssh.MethodSSHCopyID
+		methodName = "ssh-copy-id"
+	case "expect":
+		method = ssh.MethodExpect
+		methodName = "expect脚本"
+	case "native-go":
+		method = ssh.MethodNativeGo
+		methodName = "Go原生SSH客户端"
+	case "auto":
+		fallthrough
+	default:
+		method = ssh.DetectBestSSHMethod()
+		switch method {
+		case ssh.MethodExpect:
+			methodName = "expect脚本 (自动选择)"
+		case ssh.MethodSSHCopyID:
+			methodName = "ssh-copy-id (自动选择)"
+		default:
+			methodName = "ssh-copy-id (默认)"
+			method = ssh.MethodSSHCopyID
+		}
+	}
+	
+	fmt.Printf("🔧 使用方法: %s\n\n", methodName)
+	
+	// 设置SSH配置选项
+	options := ssh.SSHSetupOptions{
+		Method:          method,
+		UnifiedPassword: sshUnifiedPassword,
+		ForceGenerate:   sshForceGenerate,
+	}
+	
+	// 配置SSH免密登录
+	keyPair, err := ssh.SetupSSHForHosts(cfg.Hosts, options)
+	if err != nil {
+		return fmt.Errorf("SSH免密配置失败: %w", err)
+	}
+	
+	fmt.Println("\n🎉 SSH免密配置完成！")
+	fmt.Printf("📋 私钥路径: %s\n", keyPair.PrivateKeyPath)
+	fmt.Printf("📋 公钥路径: %s\n", keyPair.PublicKeyPath)
+	fmt.Println("\n💡 提示: 请在配置文件中手动设置 ssh_key 字段为私钥路径")
+	
+	return nil
+}
+
 func Execute() error {
 	return rootCmd.Execute()
 }
@@ -356,7 +481,12 @@ func init() {
 	installCmd.Flags().BoolVar(&rainbondFlag, "rainbond", false, "Install and configure Rainbond")
 	installCmd.Flags().BoolVar(&optimizeFlag, "optimize", false, "Optimize system for containerized environments")
 
+	sshSetupCmd.Flags().BoolVar(&sshUnifiedPassword, "unified-password", false, "All hosts use the same password")
+	sshSetupCmd.Flags().BoolVar(&sshForceGenerate, "force-generate", false, "Force generate new SSH key pair")
+	sshSetupCmd.Flags().StringVar(&sshMethod, "method", "auto", "SSH setup method: auto, ssh-copy-id, expect, native-go")
+
 	rootCmd.AddCommand(installCmd)
+	rootCmd.AddCommand(sshSetupCmd)
 }
 
 func initConfig() {

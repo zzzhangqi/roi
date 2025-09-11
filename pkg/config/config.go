@@ -49,6 +49,32 @@ func LoadConfig(configPath string) (*Config, error) {
 	return &config, nil
 }
 
+// SaveConfig 保存配置到文件
+func SaveConfig(config *Config, configPath string) error {
+	if configPath == "" {
+		return fmt.Errorf("config path is required")
+	}
+
+	// 获取绝对路径
+	absPath, err := filepath.Abs(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path: %w", err)
+	}
+
+	// 序列化配置为YAML
+	data, err := yaml.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	// 写入文件
+	if err := os.WriteFile(absPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	return nil
+}
+
 // validateRoles 验证角色配置，支持角色数组
 func validateRoles(roles []string) error {
 	if len(roles) == 0 {

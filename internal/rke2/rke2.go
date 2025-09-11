@@ -165,6 +165,13 @@ func (r *RKE2Installer) Run() error {
 			}
 		}
 
+		// 为worker节点添加标签
+		if err := r.addWorkerLabels(*firstEtcdHost); err != nil {
+			if r.logger != nil {
+				r.logger.Warn("为worker节点添加标签失败: %v", err)
+			}
+		}
+
 		if r.logger != nil {
 			r.logger.Info("RKE2集群已完成! 运行中: %d/%d", runningCount, len(hosts))
 		}
@@ -408,6 +415,15 @@ func (r *RKE2Installer) Run() error {
 
 	if r.logger != nil {
 		r.logger.Info("RKE2集群安装完成! 已安装: %d/%d, 运行中: %d/%d", finalInstalledCount, len(hosts), finalRunningCount, len(hosts))
+	}
+
+	// 为worker节点添加标签
+	if finalInstalledCount == len(hosts) {
+		if err := r.addWorkerLabels(*firstEtcdHost); err != nil {
+			if r.logger != nil {
+				r.logger.Warn("为worker节点添加标签失败: %v", err)
+			}
+		}
 	}
 
 	if finalInstalledCount < len(hosts) {
@@ -2192,6 +2208,79 @@ func (r *RKE2Installer) validatePackageIntegrityOnAllNodes() error {
 
 	if r.logger != nil {
 		r.logger.Info("所有节点安装包完整性验证通过")
+	}
+	return nil
+}
+
+// addWorkerLabels 为包含worker角色的节点添加 node-role.kubernetes.io/worker=worker 标签
+func (r *RKE2Installer) addWorkerLabels(controlNode config.Host) error {
+	if r.logger != nil {
+		r.logger.Info("开始为worker节点添加角色标签...")
+	}
+
+	// 获取包含worker角色的所有节点
+	var workerNodes []config.Host
+	for _, host := range r.config.Hosts {
+		roles := r.normalizeRoles(host.Role)
+		if r.hasRole(roles, "worker") {
+			workerNodes = append(workerNodes, host)
+		}
+	}
+
+	if len(workerNodes) == 0 {
+		if r.logger != nil {
+			r.logger.Info("未发现worker节点，跳过添加worker标签")
+		}
+		return nil
+	}
+
+	if r.logger != nil {
+		r.logger.Info("发现 %d 个worker节点需要添加标签", len(workerNodes))
+	}
+
+	// 为每个worker节点添加标签
+	successCount := 0
+	for i, workerHost := range workerNodes {
+		nodeName := r.getNodeName(workerHost)
+		if r.logger != nil {
+			r.logger.Info("为节点 %s (%s) 添加worker标签 (%d/%d)", workerHost.IP, nodeName, i+1, len(workerNodes))
+		}
+
+		// 首先检查节点是否存在并且就绪
+		checkCommand := fmt.Sprintf("kubectl get node %s -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null || echo 'NotFound'", nodeName)
+		cmd := r.buildSSHCommand(controlNode, checkCommand)
+		checkOutput, err := cmd.CombinedOutput()
+		
+		if err != nil || strings.TrimSpace(string(checkOutput)) != "True" {
+			if r.logger != nil {
+				r.logger.Warn("节点 %s (%s) 未就绪或不存在，跳过添加标签: %s", workerHost.IP, nodeName, strings.TrimSpace(string(checkOutput)))
+			}
+			continue
+		}
+
+		// 构建kubectl命令来添加标签
+		labelCommand := fmt.Sprintf("kubectl label node %s node-role.kubernetes.io/worker=worker --overwrite", nodeName)
+		
+		// 在控制节点上执行命令
+		cmd = r.buildSSHCommand(controlNode, labelCommand)
+		output, err := cmd.CombinedOutput()
+		
+		if err != nil {
+			if r.logger != nil {
+				r.logger.Warn("为节点 %s 添加worker标签失败: %v, 输出: %s", workerHost.IP, err, string(output))
+			}
+			// 不返回错误，继续处理其他节点
+			continue
+		}
+
+		successCount++
+		if r.logger != nil {
+			r.logger.Info("节点 %s (%s) worker标签添加成功", workerHost.IP, nodeName)
+		}
+	}
+
+	if r.logger != nil {
+		r.logger.Info("worker节点标签添加完成: 成功 %d/%d", successCount, len(workerNodes))
 	}
 	return nil
 }
