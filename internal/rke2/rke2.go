@@ -1125,6 +1125,15 @@ func (r *RKE2Installer) getNodeConfigSection(host config.Host) string {
 		configLines = append(configLines, fmt.Sprintf("node-external-ip: %s", host.IP))
 	}
 
+	// node-taint 配置污点
+	if len(host.NodeTaint) > 0 {
+		configLines = append(configLines, "# 节点污点配置")
+		configLines = append(configLines, "node-taint:")
+		for _, taint := range host.NodeTaint {
+			configLines = append(configLines, fmt.Sprintf("  - \"%s\"", taint))
+		}
+	}
+
 	return strings.Join(configLines, "\n")
 }
 

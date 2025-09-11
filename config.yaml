@@ -21,7 +21,9 @@ hosts:
   rbd_role:
   - rbd-gateway
   - rbd-chaos
-  mysql_master: true
+  node-taint:
+  - custom-name=k8s-app:NoSchedule
+  # mysql_master: true
 
   # - ip: 10.10.152.1
   #   internal_ip: 10.10.152.1
