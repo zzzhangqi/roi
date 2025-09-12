@@ -12,11 +12,11 @@ import (
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/cli"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // Logger 定义日志接口
@@ -38,14 +38,14 @@ type StepProgress interface {
 }
 
 type RainbondInstaller struct {
-	config         *config.Config
-	logger         Logger
-	stepProgress   StepProgress
-	chartPath      string
-	kubeConfig     *rest.Config
-	kubeClient     kubernetes.Interface
-	helmSettings   *cli.EnvSettings
-	actionConfig   *action.Configuration
+	config       *config.Config
+	logger       Logger
+	stepProgress StepProgress
+	chartPath    string
+	kubeConfig   *rest.Config
+	kubeClient   kubernetes.Interface
+	helmSettings *cli.EnvSettings
+	actionConfig *action.Configuration
 }
 
 func NewRainbondInstaller(cfg *config.Config) *RainbondInstaller {
@@ -121,16 +121,16 @@ func (r *RainbondInstaller) initializeClients() error {
 	// 初始化Helm设置，明确指定kubeconfig路径
 	r.helmSettings = cli.New()
 	r.helmSettings.KubeConfig = kubeConfigPath
-	
+
 	if r.logger != nil {
 		r.logger.Debug("Helm设置kubeconfig路径: %s", kubeConfigPath)
 	}
-	
+
 	// 创建Helm action配置
 	actionConfig := new(action.Configuration)
-	
-	// 使用空字符串作为namespace，让Helm使用kubeconfig的当前上下文
-	if err := actionConfig.Init(r.helmSettings.RESTClientGetter(), "", "memory", func(format string, v ...interface{}) {
+
+	// 指定rbd-system作为默认命名空间
+	if err := actionConfig.Init(r.helmSettings.RESTClientGetter(), "rbd-system", "memory", func(format string, v ...interface{}) {
 		if r.logger != nil {
 			r.logger.Debug("[Helm] %s", fmt.Sprintf(format, v...))
 		}
@@ -138,7 +138,7 @@ func (r *RainbondInstaller) initializeClients() error {
 		return fmt.Errorf("初始化Helm action配置失败: %w", err)
 	}
 	r.actionConfig = actionConfig
-	
+
 	// 验证Helm配置是否正常工作
 	if r.logger != nil {
 		r.logger.Debug("验证Helm配置...")
@@ -164,7 +164,7 @@ func (r *RainbondInstaller) initializeClients() error {
 func (r *RainbondInstaller) getKubeConfig() (string, error) {
 	// 优先使用RKE2模块保存的本地kubeconfig文件
 	localKubeConfigPath := "./kubeconfig"
-	
+
 	// 检查本地kubeconfig是否存在
 	if _, err := os.Stat(localKubeConfigPath); err == nil {
 		if r.logger != nil {
@@ -172,15 +172,15 @@ func (r *RainbondInstaller) getKubeConfig() (string, error) {
 		}
 		return localKubeConfigPath, nil
 	}
-	
+
 	// 如果本地文件不存在，回退到从远程获取（兼容性）
 	controlNode := r.config.Hosts[0]
 	fallbackPath := "/tmp/kubeconfig"
-	
+
 	if r.logger != nil {
 		r.logger.Warn("本地kubeconfig文件不存在，从控制节点 %s 获取kubeconfig...", controlNode.IP)
 	}
-	
+
 	// 使用scp复制kubeconfig到本地
 	var scpCmd []string
 	if controlNode.Password != "" {
@@ -191,14 +191,14 @@ func (r *RainbondInstaller) getKubeConfig() (string, error) {
 			fallbackPath}
 	} else if controlNode.SSHKey != "" {
 		scpCmd = []string{"scp", "-i", controlNode.SSHKey,
-			"-o", "StrictHostKeyChecking=no", 
+			"-o", "StrictHostKeyChecking=no",
 			"-o", "UserKnownHostsFile=/dev/null",
 			fmt.Sprintf("%s@%s:/etc/rancher/rke2/rke2.yaml", controlNode.User, controlNode.IP),
 			fallbackPath}
 	} else {
 		scpCmd = []string{"scp",
 			"-o", "StrictHostKeyChecking=no",
-			"-o", "UserKnownHostsFile=/dev/null", 
+			"-o", "UserKnownHostsFile=/dev/null",
 			fmt.Sprintf("%s@%s:/etc/rancher/rke2/rke2.yaml", controlNode.User, controlNode.IP),
 			fallbackPath}
 	}
@@ -208,12 +208,12 @@ func (r *RainbondInstaller) getKubeConfig() (string, error) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("复制kubeconfig失败: %w, 输出: %s", err, string(output))
 	}
-	
+
 	// 修改server地址为实际IP
 	if err := r.updateKubeConfigServer(fallbackPath, controlNode.IP); err != nil {
 		return "", fmt.Errorf("更新kubeconfig server地址失败: %w", err)
 	}
-	
+
 	return fallbackPath, nil
 }
 
@@ -227,7 +227,7 @@ func (r *RainbondInstaller) updateKubeConfigServer(kubeconfigPath, serverIP stri
 
 	// 替换server地址
 	content := strings.ReplaceAll(string(data), "https://127.0.0.1:6443", fmt.Sprintf("https://%s:6443", serverIP))
-	
+
 	// 写回文件
 	return os.WriteFile(kubeconfigPath, []byte(content), 0644)
 }
@@ -326,8 +326,6 @@ func (r *RainbondInstaller) checkKubernetesReady() error {
 	}
 	return nil
 }
-
-
 
 func (r *RainbondInstaller) checkExistingDeployment() (bool, error) {
 	if r.logger != nil {
@@ -433,7 +431,7 @@ func (r *RainbondInstaller) generateValues() (map[string]interface{}, error) {
 		if r.logger != nil {
 			r.logger.Info("检测到MySQL已启用，自动配置数据库连接...")
 		}
-		
+
 		cluster, ok := values["Cluster"].(map[string]interface{})
 		if !ok {
 			cluster = make(map[string]interface{})
@@ -513,7 +511,7 @@ func (r *RainbondInstaller) installHelmChart(values map[string]interface{}) erro
 
 	if r.logger != nil {
 		r.logger.Info("Rainbond Helm Chart安装成功")
-		r.logger.Info("Release名称: %s, 版本: %d, 状态: %s", 
+		r.logger.Info("Release名称: %s, 版本: %d, 状态: %s",
 			rel.Name, rel.Version, rel.Info.Status)
 	}
 	return nil
@@ -523,4 +521,3 @@ func (r *RainbondInstaller) installHelmChart(values map[string]interface{}) erro
 func (r *RainbondInstaller) buildCommand(name string, args ...string) *exec.Cmd {
 	return exec.Command(name, args...)
 }
-
