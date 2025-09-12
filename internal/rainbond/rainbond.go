@@ -6,12 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/rainbond/rainbond-offline-installer/pkg/config"
-	"helm.sh/helm/v3/pkg/action"
-	"helm.sh/helm/v3/pkg/chart/loader"
-	"helm.sh/helm/v3/pkg/cli"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -38,14 +34,13 @@ type StepProgress interface {
 }
 
 type RainbondInstaller struct {
-	config       *config.Config
-	logger       Logger
-	stepProgress StepProgress
-	chartPath    string
-	kubeConfig   *rest.Config
-	kubeClient   kubernetes.Interface
-	helmSettings *cli.EnvSettings
-	actionConfig *action.Configuration
+	config         *config.Config
+	logger         Logger
+	stepProgress   StepProgress
+	chartPath      string
+	kubeConfig     *rest.Config
+	kubeClient     kubernetes.Interface
+	kubeConfigPath string
 }
 
 func NewRainbondInstaller(cfg *config.Config) *RainbondInstaller {
@@ -76,13 +71,14 @@ func (r *RainbondInstaller) SetChartPath(path string) {
 	r.chartPath = path
 }
 
-// 初始化Kubernetes客户端和Helm配置
+// 初始化Kubernetes客户端
 func (r *RainbondInstaller) initializeClients() error {
 	// 获取kubeconfig
 	kubeConfigPath, err := r.getKubeConfig()
 	if err != nil {
 		return fmt.Errorf("获取kubeconfig失败: %w", err)
 	}
+	r.kubeConfigPath = kubeConfigPath
 
 	if r.logger != nil {
 		r.logger.Debug("使用kubeconfig文件: %s", kubeConfigPath)
@@ -118,45 +114,6 @@ func (r *RainbondInstaller) initializeClients() error {
 		r.logger.Debug("成功连接到Kubernetes集群，发现 %d 个节点", len(nodes.Items))
 	}
 
-	// 初始化Helm设置，明确指定kubeconfig路径
-	r.helmSettings = cli.New()
-	r.helmSettings.KubeConfig = kubeConfigPath
-
-	if r.logger != nil {
-		r.logger.Debug("Helm设置kubeconfig路径: %s", kubeConfigPath)
-	}
-
-	// 创建Helm action配置
-	actionConfig := new(action.Configuration)
-
-	// 指定rbd-system作为默认命名空间，使用默认存储（secret）
-	if err := actionConfig.Init(r.helmSettings.RESTClientGetter(), "rbd-system", "", func(format string, v ...interface{}) {
-		if r.logger != nil {
-			r.logger.Debug("[Helm] %s", fmt.Sprintf(format, v...))
-		}
-	}); err != nil {
-		return fmt.Errorf("初始化Helm action配置失败: %w", err)
-	}
-	r.actionConfig = actionConfig
-
-	// 验证Helm配置是否正常工作
-	if r.logger != nil {
-		r.logger.Debug("验证Helm配置...")
-	}
-	testList := action.NewList(actionConfig)
-	testList.SetStateMask()
-	_, testErr := testList.Run()
-	if testErr != nil {
-		if r.logger != nil {
-			r.logger.Warn("Helm配置测试失败: %v", testErr)
-		}
-		// 不返回错误，继续执行，但记录警告
-	} else {
-		if r.logger != nil {
-			r.logger.Debug("Helm配置验证成功")
-		}
-	}
-
 	return nil
 }
 
@@ -172,49 +129,9 @@ func (r *RainbondInstaller) getKubeConfig() (string, error) {
 		}
 		return localKubeConfigPath, nil
 	}
-
-	// 如果本地文件不存在，回退到从远程获取（兼容性）
-	controlNode := r.config.Hosts[0]
-	fallbackPath := "/tmp/kubeconfig"
-
-	if r.logger != nil {
-		r.logger.Warn("本地kubeconfig文件不存在，从控制节点 %s 获取kubeconfig...", controlNode.IP)
-	}
-
-	// 使用scp复制kubeconfig到本地
-	var scpCmd []string
-	if controlNode.Password != "" {
-		scpCmd = []string{"sshpass", "-p", controlNode.Password, "scp",
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "UserKnownHostsFile=/dev/null",
-			fmt.Sprintf("%s@%s:/etc/rancher/rke2/rke2.yaml", controlNode.User, controlNode.IP),
-			fallbackPath}
-	} else if controlNode.SSHKey != "" {
-		scpCmd = []string{"scp", "-i", controlNode.SSHKey,
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "UserKnownHostsFile=/dev/null",
-			fmt.Sprintf("%s@%s:/etc/rancher/rke2/rke2.yaml", controlNode.User, controlNode.IP),
-			fallbackPath}
-	} else {
-		scpCmd = []string{"scp",
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "UserKnownHostsFile=/dev/null",
-			fmt.Sprintf("%s@%s:/etc/rancher/rke2/rke2.yaml", controlNode.User, controlNode.IP),
-			fallbackPath}
-	}
-
-	// 执行scp命令
-	cmd := r.buildCommand(scpCmd[0], scpCmd[1:]...)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("复制kubeconfig失败: %w, 输出: %s", err, string(output))
-	}
-
-	// 修改server地址为实际IP
-	if err := r.updateKubeConfigServer(fallbackPath, controlNode.IP); err != nil {
-		return "", fmt.Errorf("更新kubeconfig server地址失败: %w", err)
-	}
-
-	return fallbackPath, nil
+	
+	// 如果本地文件不存在，返回错误
+	return "", fmt.Errorf("本地kubeconfig文件不存在: %s，请先运行RKE2安装", localKubeConfigPath)
 }
 
 // 更新kubeconfig中的server地址
@@ -247,7 +164,7 @@ func (r *RainbondInstaller) Run() error {
 	}
 
 	// 确保客户端已初始化
-	if r.kubeClient == nil || r.actionConfig == nil {
+	if r.kubeClient == nil {
 		if r.logger != nil {
 			r.logger.Debug("初始化Kubernetes和Helm客户端...")
 		}
@@ -337,36 +254,32 @@ func (r *RainbondInstaller) checkExistingDeployment() (bool, error) {
 		namespace = "rbd-system"
 	}
 
-	// 确保actionConfig已初始化
-	if r.actionConfig == nil {
-		return false, fmt.Errorf("Helm action配置未初始化")
-	}
-
 	if r.logger != nil {
-		r.logger.Debug("使用Helm API检查现有部署，目标命名空间: %s", namespace)
+		r.logger.Debug("使用Helm CLI检查现有部署，目标命名空间: %s", namespace)
 	}
 
-	// 使用Helm API检查是否已安装
-	list := action.NewList(r.actionConfig)
-	list.SetStateMask()
-	releases, err := list.Run()
+	// 使用Helm CLI检查是否已安装
+	cmd := r.buildHelmCommand("list", "-n", namespace, "-f", "rainbond", "-q")
+	output, err := cmd.Output()
 	if err != nil {
 		if r.logger != nil {
-			r.logger.Error("Helm列表查询失败: %v", err)
+			r.logger.Debug("Helm list命令执行失败: %v", err)
 		}
-		return false, fmt.Errorf("查询Helm releases失败: %w", err)
+		// 如果是因为命名空间不存在等原因，认为没有部署
+		return false, nil
+	}
+
+	releases := strings.TrimSpace(string(output))
+	if releases != "" {
+		if r.logger != nil {
+			r.logger.Info("发现现有Rainbond部署: %s", releases)
+		}
+		return true, nil
 	}
 
 	if r.logger != nil {
-		r.logger.Debug("发现 %d 个Helm releases", len(releases))
+		r.logger.Debug("未发现现有Rainbond部署")
 	}
-
-	for _, rel := range releases {
-		if rel.Name == "rainbond" && rel.Namespace == namespace {
-			return true, nil
-		}
-	}
-
 	return false, nil
 }
 
@@ -482,37 +395,237 @@ func (r *RainbondInstaller) installHelmChart(values map[string]interface{}) erro
 		return fmt.Errorf("chart包不存在: %s", r.chartPath)
 	}
 
-	// 加载chart
-	chart, err := loader.Load(r.chartPath)
-	if err != nil {
-		return fmt.Errorf("加载chart失败: %w", err)
-	}
-
-	// 创建Helm install action
-	install := action.NewInstall(r.actionConfig)
-	install.ReleaseName = releaseName
-	install.Namespace = namespace
-	install.CreateNamespace = true
-	install.Wait = true
-	install.Timeout = 20 * time.Minute // 20分钟超时
-
 	if r.logger != nil {
-		r.logger.Info("使用Helm SDK安装chart: %s 到命名空间: %s", releaseName, namespace)
+		r.logger.Info("使用Helm CLI安装chart: %s 到命名空间: %s", releaseName, namespace)
 	}
 
-	// 执行安装
-	rel, err := install.Run(chart, values)
+	// 构建Helm install命令 - 简化版本
+	args := []string{
+		"install", releaseName, r.chartPath,
+		"--namespace", namespace,
+		"--create-namespace", 
+		"--timeout", "20m",
+		"--wait",
+	}
+
+	// 如果有values配置，生成values文件并添加参数
+	if len(values) > 0 {
+		valuesFile, err := r.generateValuesFile(values)
+		if err != nil {
+			return fmt.Errorf("生成values文件失败: %w", err)
+		}
+		
+		// 添加values参数
+		args = append(args, "--values", valuesFile)
+		
+		if r.logger != nil {
+			r.logger.Debug("使用values文件: %s", valuesFile)
+		}
+	}
+
+	// 执行Helm install命令
+	cmd := r.buildHelmCommand(args...)
+	if r.logger != nil {
+		r.logger.Debug("执行Helm命令: %s", strings.Join(append([]string{"helm"}, args...), " "))
+	}
+
+	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if r.logger != nil {
 			r.logger.Error("Helm安装失败: %v", err)
+			r.logger.Error("Helm输出: %s", string(output))
+
+			// 如果是名称冲突错误，尝试清理并重试
+			if strings.Contains(string(output), "cannot re-use a name that is still in use") {
+				r.logger.Info("检测到名称冲突，尝试清理现有release...")
+				if cleanErr := r.cleanupExistingRelease(releaseName, namespace); cleanErr != nil {
+					r.logger.Error("清理现有release失败: %v", cleanErr)
+				} else {
+					r.logger.Info("清理完成，重新尝试安装...")
+					retryOutput, retryErr := cmd.CombinedOutput()
+					if retryErr == nil {
+						r.logger.Info("重新安装成功")
+						r.logger.Info("Helm输出: %s", string(retryOutput))
+						return nil
+					} else {
+						r.logger.Error("重新安装仍然失败: %v", retryErr)
+						r.logger.Error("重试输出: %s", string(retryOutput))
+					}
+				}
+			}
 		}
-		return fmt.Errorf("helm install失败: %w", err)
+		return fmt.Errorf("helm install失败: %w, 输出: %s", err, string(output))
 	}
 
 	if r.logger != nil {
 		r.logger.Info("Rainbond Helm Chart安装成功")
-		r.logger.Info("Release名称: %s, 版本: %d, 状态: %s",
-			rel.Name, rel.Version, rel.Info.Status)
+		r.logger.Info("Helm输出: %s", string(output))
+	}
+	return nil
+}
+
+// cleanupExistingRelease 清理可能存在的Helm release残留
+func (r *RainbondInstaller) cleanupExistingRelease(releaseName, namespace string) error {
+	if r.logger != nil {
+		r.logger.Debug("尝试清理release: %s (命名空间: %s)", releaseName, namespace)
+	}
+
+	// 使用Helm CLI删除
+	cmd := r.buildHelmCommand("uninstall", releaseName, "-n", namespace)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if r.logger != nil {
+			r.logger.Debug("Helm CLI删除失败: %v，输出: %s，尝试手动清理...", err, string(output))
+		}
+
+		// 如果Helm CLI失败，尝试手动清理Kubernetes资源
+		return r.manualCleanupResources(releaseName, namespace)
+	}
+
+	if r.logger != nil {
+		r.logger.Info("Helm release清理成功")
+		r.logger.Debug("清理输出: %s", string(output))
+	}
+	return nil
+}
+
+// manualCleanupResources 手动清理Kubernetes资源
+func (r *RainbondInstaller) manualCleanupResources(releaseName, namespace string) error {
+	if r.logger != nil {
+		r.logger.Debug("手动清理Kubernetes中的Helm相关资源...")
+	}
+
+	// 清理Helm存储的Secret
+	labelSelector := fmt.Sprintf("owner=helm,name=%s", releaseName)
+
+	secrets, err := r.kubeClient.CoreV1().Secrets(namespace).List(context.Background(), metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+	if err != nil {
+		return fmt.Errorf("查询Helm secrets失败: %w", err)
+	}
+
+	for _, secret := range secrets.Items {
+		if r.logger != nil {
+			r.logger.Debug("删除Helm secret: %s", secret.Name)
+		}
+		err := r.kubeClient.CoreV1().Secrets(namespace).Delete(context.Background(), secret.Name, metav1.DeleteOptions{})
+		if err != nil {
+			r.logger.Warn("删除secret %s 失败: %v", secret.Name, err)
+		}
+	}
+
+	if r.logger != nil {
+		r.logger.Info("手动清理完成，删除了 %d 个Helm相关的Secret", len(secrets.Items))
+	}
+
+	return nil
+}
+
+// buildHelmCommand 构建Helm命令
+func (r *RainbondInstaller) buildHelmCommand(args ...string) *exec.Cmd {
+	cmd := exec.Command("helm", args...)
+	// 设置KUBECONFIG环境变量
+	if r.kubeConfigPath != "" {
+		cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", r.kubeConfigPath))
+	}
+	return cmd
+}
+
+// generateValuesFile 生成values文件
+func (r *RainbondInstaller) generateValuesFile(values map[string]interface{}) (string, error) {
+	valuesFileName := "./rainbond-values.yaml"
+	
+	// 如果values为空，创建一个空文件
+	if len(values) == 0 {
+		file, err := os.Create(valuesFileName)
+		if err != nil {
+			return "", fmt.Errorf("创建values文件失败: %w", err)
+		}
+		file.Close()
+		return valuesFileName, nil
+	}
+
+	// 转换map为YAML格式
+	yamlContent, err := r.mapToYAML(values)
+	if err != nil {
+		return "", fmt.Errorf("转换values为YAML失败: %w", err)
+	}
+
+	// 创建文件到当前目录
+	file, err := os.Create(valuesFileName)
+	if err != nil {
+		return "", fmt.Errorf("创建values文件失败: %w", err)
+	}
+
+	// 写入YAML内容
+	if _, err := file.WriteString(yamlContent); err != nil {
+		file.Close()
+		os.Remove(valuesFileName)
+		return "", fmt.Errorf("写入values文件失败: %w", err)
+	}
+
+	if err := file.Close(); err != nil {
+		os.Remove(valuesFileName)
+		return "", fmt.Errorf("关闭values文件失败: %w", err)
+	}
+
+	if r.logger != nil {
+		r.logger.Info("生成values文件: %s", valuesFileName)
+		r.logger.Debug("Values内容:\n%s", yamlContent)
+	}
+
+	return valuesFileName, nil
+}
+
+// mapToYAML 简单的map转YAML实现
+func (r *RainbondInstaller) mapToYAML(m map[string]interface{}) (string, error) {
+	var result strings.Builder
+	for key, value := range m {
+		if err := r.writeYAMLValue(&result, key, value, 0); err != nil {
+			return "", err
+		}
+	}
+	return result.String(), nil
+}
+
+// writeYAMLValue 递归写入YAML值
+func (r *RainbondInstaller) writeYAMLValue(w *strings.Builder, key string, value interface{}, indent int) error {
+	spaces := strings.Repeat("  ", indent)
+
+	switch v := value.(type) {
+	case map[string]interface{}:
+		w.WriteString(fmt.Sprintf("%s%s:\n", spaces, key))
+		for k, val := range v {
+			if err := r.writeYAMLValue(w, k, val, indent+1); err != nil {
+				return err
+			}
+		}
+	case []interface{}:
+		w.WriteString(fmt.Sprintf("%s%s:\n", spaces, key))
+		for _, item := range v {
+			w.WriteString(fmt.Sprintf("%s  - ", spaces))
+			if m, ok := item.(map[string]interface{}); ok {
+				w.WriteString("\n")
+				for k, val := range m {
+					if err := r.writeYAMLValue(w, k, val, indent+2); err != nil {
+						return err
+					}
+				}
+			} else {
+				w.WriteString(fmt.Sprintf("%v\n", item))
+			}
+		}
+	case string:
+		w.WriteString(fmt.Sprintf("%s%s: %q\n", spaces, key, v))
+	case bool:
+		w.WriteString(fmt.Sprintf("%s%s: %t\n", spaces, key, v))
+	case int:
+		w.WriteString(fmt.Sprintf("%s%s: %d\n", spaces, key, v))
+	case float64:
+		w.WriteString(fmt.Sprintf("%s%s: %g\n", spaces, key, v))
+	default:
+		w.WriteString(fmt.Sprintf("%s%s: %v\n", spaces, key, v))
 	}
 	return nil
 }
