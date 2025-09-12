@@ -524,7 +524,23 @@ func (r *RainbondInstaller) manualCleanupResources(releaseName, namespace string
 
 // buildHelmCommand 构建Helm命令
 func (r *RainbondInstaller) buildHelmCommand(args ...string) *exec.Cmd {
-	cmd := exec.Command("helm", args...)
+	var helmPath string
+	
+	// 优先使用当前目录下的helm二进制文件
+	if _, err := os.Stat("./helm"); err == nil {
+		helmPath = "./helm"
+		if r.logger != nil {
+			r.logger.Debug("使用当前目录下的helm二进制: %s", helmPath)
+		}
+	} else {
+		// 回退到系统PATH中的helm
+		helmPath = "helm"
+		if r.logger != nil {
+			r.logger.Debug("使用系统PATH中的helm")
+		}
+	}
+	
+	cmd := exec.Command(helmPath, args...)
 	// 设置KUBECONFIG环境变量
 	if r.kubeConfigPath != "" {
 		cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", r.kubeConfigPath))
