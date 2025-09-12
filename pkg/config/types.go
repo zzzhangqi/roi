@@ -2,6 +2,7 @@ package config
 
 type Config struct {
 	Hosts    []Host         `yaml:"hosts"`
+	RKE2     RKE2Config     `yaml:"rke2,omitempty"`
 	Rainbond RainbondConfig `yaml:"rainbond,omitempty"`
 	MySQL    MySQLConfig    `yaml:"mysql,omitempty"`
 }
@@ -31,6 +32,10 @@ type LogicalVolume struct {
 	LVName     string `yaml:"lv_name"`
 	Size       string `yaml:"size"`
 	MountPoint string `yaml:"mount_point"`
+}
+
+type RKE2Config struct {
+	RegistryConfig string `yaml:"registry_config,omitempty"` // containerd镜像仓库配置
 }
 
 

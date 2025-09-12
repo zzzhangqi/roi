@@ -1414,7 +1414,10 @@ func (r *RKE2Installer) createRegistryConfig(host config.Host) error {
 		r.logger.Info("主机 %s: 创建镜像仓库配置文件", host.IP)
 	}
 
-	registryConfig := `mirrors:
+	// 使用配置文件中的registry_config，如果没有则使用默认值
+	registryConfig := r.config.RKE2.RegistryConfig
+	if registryConfig == "" {
+		registryConfig = `mirrors:
   "goodrain.me":
     endpoint:
       - "https://goodrain.me"
@@ -1425,6 +1428,7 @@ configs:
       password: admin1234
     tls:
       insecure_skip_verify: true`
+	}
 
 	registryConfigPath := "/etc/rancher/rke2/registries.yaml"
 
