@@ -129,8 +129,8 @@ func (r *RainbondInstaller) initializeClients() error {
 	// 创建Helm action配置
 	actionConfig := new(action.Configuration)
 
-	// 指定rbd-system作为默认命名空间
-	if err := actionConfig.Init(r.helmSettings.RESTClientGetter(), "rbd-system", "memory", func(format string, v ...interface{}) {
+	// 指定rbd-system作为默认命名空间，使用默认存储（secret）
+	if err := actionConfig.Init(r.helmSettings.RESTClientGetter(), "rbd-system", "", func(format string, v ...interface{}) {
 		if r.logger != nil {
 			r.logger.Debug("[Helm] %s", fmt.Sprintf(format, v...))
 		}
