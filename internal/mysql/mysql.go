@@ -375,6 +375,10 @@ func (m *MySQLInstaller) initializeKubeClient() error {
 		return fmt.Errorf("本地kubeconfig文件不存在: %s，请先运行RKE2安装", localKubeConfigPath)
 	}
 
+	if m.logger != nil {
+		m.logger.Debug("使用kubeconfig文件: %s", localKubeConfigPath)
+	}
+
 	// 创建Kubernetes配置
 	config, err := clientcmd.BuildConfigFromFlags("", localKubeConfigPath)
 	if err != nil {
@@ -382,12 +386,43 @@ func (m *MySQLInstaller) initializeKubeClient() error {
 	}
 	m.kubeConfig = config
 
+	if m.logger != nil {
+		m.logger.Debug("连接到Kubernetes API服务器: %s", config.Host)
+	}
+
 	// 创建Kubernetes客户端
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return fmt.Errorf("创建Kubernetes客户端失败: %w", err)
 	}
 	m.kubeClient = clientset
+
+	// 测试连接
+	if err := m.testKubernetesConnection(); err != nil {
+		return fmt.Errorf("测试Kubernetes连接失败: %w", err)
+	}
+
+	return nil
+}
+
+// testKubernetesConnection 测试Kubernetes集群连接
+func (m *MySQLInstaller) testKubernetesConnection() error {
+	if m.logger != nil {
+		m.logger.Debug("测试Kubernetes集群连接...")
+	}
+
+	// 尝试获取节点列表来测试连接
+	nodes, err := m.kubeClient.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("无法连接到Kubernetes集群: %w", err)
+	}
+
+	if m.logger != nil {
+		m.logger.Debug("成功连接到Kubernetes集群，发现 %d 个节点", len(nodes.Items))
+		for _, node := range nodes.Items {
+			m.logger.Debug("  节点: %s", node.Name)
+		}
+	}
 
 	return nil
 }
@@ -910,9 +945,20 @@ func (m *MySQLInstaller) applyYAMLOnFirstNode(yamlContent, component string) err
 
 	// 确保Kubernetes客户端已初始化
 	if m.kubeClient == nil {
+		if m.logger != nil {
+			m.logger.Debug("Kubernetes客户端未初始化，开始初始化...")
+		}
 		if err := m.initializeKubeClient(); err != nil {
 			return fmt.Errorf("初始化Kubernetes客户端失败: %w", err)
 		}
+		if m.logger != nil {
+			m.logger.Debug("Kubernetes客户端初始化成功")
+		}
+	}
+
+	// 确保rbd-system命名空间存在
+	if err := m.ensureNamespace("rbd-system"); err != nil {
+		return fmt.Errorf("确保命名空间存在失败: %w", err)
 	}
 
 	// 使用Kubernetes API解析和创建资源
@@ -926,35 +972,99 @@ func (m *MySQLInstaller) applyYAMLOnFirstNode(yamlContent, component string) err
 	return nil
 }
 
+// ensureNamespace 确保命名空间存在
+func (m *MySQLInstaller) ensureNamespace(namespace string) error {
+	if m.logger != nil {
+		m.logger.Debug("检查命名空间: %s", namespace)
+	}
+
+	// 检查命名空间是否已存在
+	_, err := m.kubeClient.CoreV1().Namespaces().Get(context.TODO(), namespace, metav1.GetOptions{})
+	if err == nil {
+		if m.logger != nil {
+			m.logger.Debug("命名空间 %s 已存在", namespace)
+		}
+		return nil
+	}
+
+	// 命名空间不存在，创建它
+	if m.logger != nil {
+		m.logger.Info("创建命名空间: %s", namespace)
+	}
+
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: namespace,
+		},
+	}
+
+	_, err = m.kubeClient.CoreV1().Namespaces().Create(context.TODO(), ns, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("创建命名空间 %s 失败: %w", namespace, err)
+	}
+
+	if m.logger != nil {
+		m.logger.Info("命名空间 %s 创建成功", namespace)
+	}
+	return nil
+}
+
 // applyYAMLContent 解析YAML内容并使用Kubernetes API创建资源
 func (m *MySQLInstaller) applyYAMLContent(yamlContent string) error {
+	if m.logger != nil {
+		m.logger.Debug("开始解析YAML内容，长度: %d", len(yamlContent))
+	}
+
 	// 创建解码器
 	decoder := serializer.NewCodecFactory(scheme.Scheme).UniversalDeserializer()
 	
 	// 按文档分割YAML内容
 	docs := strings.Split(yamlContent, "---")
 	
-	for _, doc := range docs {
+	resourceCount := 0
+	for i, doc := range docs {
 		doc = strings.TrimSpace(doc)
 		if doc == "" || strings.HasPrefix(doc, "#") {
+			if m.logger != nil && doc != "" {
+				m.logger.Debug("跳过注释文档 %d", i)
+			}
 			continue
+		}
+
+		if m.logger != nil {
+			m.logger.Debug("解析YAML文档 %d，内容前100字符: %s", i, 
+				func(s string) string {
+					if len(s) > 100 {
+						return s[:100] + "..."
+					}
+					return s
+				}(doc))
 		}
 
 		// 解析YAML文档
 		obj, gvk, err := decoder.Decode([]byte(doc), nil, nil)
 		if err != nil {
 			if m.logger != nil {
-				m.logger.Warn("跳过无法解析的YAML文档: %v", err)
+				m.logger.Error("解析YAML文档 %d 失败: %v", i, err)
+				m.logger.Debug("失败的YAML内容: %s", doc)
 			}
-			continue
+			return fmt.Errorf("解析YAML文档失败: %w", err)
+		}
+
+		if m.logger != nil {
+			m.logger.Info("成功解析资源: %s/%s", gvk.Kind, gvk.Version)
 		}
 
 		// 根据对象类型创建资源
 		if err := m.createKubernetesResource(obj, gvk); err != nil {
-			return fmt.Errorf("创建资源失败: %w", err)
+			return fmt.Errorf("创建资源 %s 失败: %w", gvk.Kind, err)
 		}
+		resourceCount++
 	}
 
+	if m.logger != nil {
+		m.logger.Info("成功处理 %d 个资源", resourceCount)
+	}
 	return nil
 }
 
