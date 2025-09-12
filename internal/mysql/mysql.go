@@ -9,10 +9,15 @@ import (
 	"time"
 
 	"github.com/rainbond/rainbond-offline-installer/pkg/config"
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -605,7 +610,7 @@ func (m *MySQLInstaller) deployMaster() error {
 		m.config.MySQL.DataPath,     // hostPath
 	)
 
-	// 在第一个节点上执行kubectl apply
+	// 使用Kubernetes API创建资源
 	return m.applyYAMLOnFirstNode(yamlContent, "MySQL Master")
 }
 
@@ -629,7 +634,7 @@ func (m *MySQLInstaller) deploySlave() error {
 		m.config.MySQL.DataPath,     // hostPath
 	)
 
-	// 在第一个节点上执行kubectl apply
+	// 使用Kubernetes API创建资源
 	return m.applyYAMLOnFirstNode(yamlContent, "MySQL Slave")
 }
 
@@ -664,34 +669,9 @@ func (m *MySQLInstaller) initializeDatabases() error {
 		m.logger.Info("初始化MySQL数据库...")
 	}
 
-	// 先删除可能存在的Job（因为Job的spec.template字段不可变）
-	if m.logger != nil {
-		m.logger.Info("清理可能存在的MySQL初始化Job...")
-	}
-	deleteCmd := m.buildSSHCommand(m.config.Hosts[0], "kubectl delete job mysql-init-databases -n rbd-system --ignore-not-found=true")
-	if err := deleteCmd.Run(); err != nil {
-		if m.logger != nil {
-			m.logger.Warn("删除现有Job失败，但继续执行: %v", err)
-		}
-	}
-
-	// 等待Job删除完成
-	if m.logger != nil {
-		m.logger.Info("等待Job删除完成...")
-	}
-	for i := 0; i < 30; i++ {
-		checkCmd := m.buildSSHCommand(m.config.Hosts[0], "kubectl get job mysql-init-databases -n rbd-system")
-		if err := checkCmd.Run(); err != nil {
-			// Job不存在，可以继续
-			break
-		}
-		if i == 29 {
-			if m.logger != nil {
-				m.logger.Warn("等待Job删除超时，但继续执行")
-			}
-		}
-		time.Sleep(2 * time.Second)
-	}
+	// Job配置了ttlSecondsAfterFinished: 60，完成后会自动清理
+	jobName := "mysql-init-databases"
+	namespace := "rbd-system"
 
 	// 生成MySQL初始化Job YAML
 	yamlContent := fmt.Sprintf(mysqlInitYAML,
@@ -706,7 +686,7 @@ func (m *MySQLInstaller) initializeDatabases() error {
 		m.config.MySQL.RootPassword, // password for cleanup test table
 	)
 
-	// 在第一个节点上执行kubectl apply
+	// 使用Kubernetes API创建资源
 	if err := m.applyYAMLOnFirstNode(yamlContent, "MySQL 初始化Job"); err != nil {
 		return err
 	}
@@ -718,10 +698,11 @@ func (m *MySQLInstaller) initializeDatabases() error {
 	// 等待Job的Pod启动并获取日志
 	var podName string
 	for i := 0; i < 30; i++ { // 等待Pod创建
-		cmd := m.buildSSHCommand(m.config.Hosts[0], "kubectl get pods -l job-name=mysql-init-databases -n rbd-system -o jsonpath='{.items[0].metadata.name}' 2>/dev/null")
-		output, err := cmd.Output()
-		if err == nil && strings.TrimSpace(string(output)) != "" {
-			podName = strings.TrimSpace(string(output))
+		pods, err := m.kubeClient.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{
+			LabelSelector: "job-name=mysql-init-databases",
+		})
+		if err == nil && len(pods.Items) > 0 {
+			podName = pods.Items[0].Name
 			if m.logger != nil {
 				m.logger.Info("找到初始化Pod: %s", podName)
 			}
@@ -733,77 +714,30 @@ func (m *MySQLInstaller) initializeDatabases() error {
 		time.Sleep(2 * time.Second)
 	}
 
-	// 实时流式输出日志
+	// 简化版本：定期检查Job状态
 	if m.logger != nil {
-		m.logger.Info("=== MySQL初始化日志 ===")
+		m.logger.Info("=== 监控MySQL初始化任务进度 ===")
 	}
-	logCmd := m.buildSSHCommand(m.config.Hosts[0], fmt.Sprintf("kubectl logs -f %s -n rbd-system", podName))
-
-	// 启动日志流
-	logCmd.Stdout = nil // 清除默认输出
-	logCmd.Stderr = nil
-
-	// 获取输出管道
-	stdout, err := logCmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("获取日志输出管道失败: %w", err)
-	}
-
-	// 启动日志命令
-	if err := logCmd.Start(); err != nil {
-		return fmt.Errorf("启动日志命令失败: %w", err)
-	}
-
-	// 在goroutine中实时读取和打印日志
-	logDone := make(chan bool)
-	go func() {
-		for {
-			// 读取日志输出
-			buffer := make([]byte, 1024)
-			n, err := stdout.Read(buffer)
-			if err != nil {
-				if err.Error() != "EOF" {
-					if m.logger != nil {
-						m.logger.Warn("读取日志失败: %v", err)
-					}
-				}
-				break
-			}
-			if n > 0 {
-				// 打印到控制台（移除logger前缀，直接输出）
-				fmt.Print(string(buffer[:n]))
-			}
-		}
-		logDone <- true
-	}()
 
 	// 等待Job完成
 	jobCompleted := false
 	for i := 0; i < 30; i++ { // 最多等待5分钟
-		cmd := m.buildSSHCommand(m.config.Hosts[0], "kubectl get job mysql-init-databases -n rbd-system -o jsonpath='{.status.succeeded}'")
-		output, err := cmd.Output()
-		if err == nil && strings.TrimSpace(string(output)) == "1" {
-			jobCompleted = true
-			break
-		}
-
-		// 检查Job是否失败
-		cmd = m.buildSSHCommand(m.config.Hosts[0], "kubectl get job mysql-init-databases -n rbd-system -o jsonpath='{.status.failed}'")
-		output, err = cmd.Output()
-		if err == nil && strings.TrimSpace(string(output)) == "1" {
-			logCmd.Process.Kill()
-			<-logDone
-			return fmt.Errorf("数据库初始化Job执行失败")
+		job, err := m.kubeClient.BatchV1().Jobs(namespace).Get(context.TODO(), jobName, metav1.GetOptions{})
+		if err == nil {
+			if job.Status.Succeeded > 0 {
+				jobCompleted = true
+				break
+			}
+			if job.Status.Failed > 0 {
+				return fmt.Errorf("数据库初始化Job执行失败")
+			}
+			if m.logger != nil && i%3 == 0 { // 每30秒输出一次进度
+				m.logger.Info("初始化任务进行中... (%d/5分钟)", (i+1)*10)
+			}
 		}
 
 		time.Sleep(10 * time.Second)
 	}
-
-	// 终止日志流
-	if logCmd.Process != nil {
-		logCmd.Process.Kill()
-	}
-	<-logDone
 
 	if !jobCompleted {
 		return fmt.Errorf("数据库初始化超时")
@@ -820,42 +754,53 @@ func (m *MySQLInstaller) verifyDeployment() error {
 		m.logger.Info("验证MySQL部署状态...")
 	}
 
+	namespace := "rbd-system"
+
 	// 检查Master状态
-	cmd := m.buildSSHCommand(m.config.Hosts[0], "kubectl get pods -l app=mysql-master -n rbd-system")
-	output, err := cmd.Output()
+	masterPods, err := m.kubeClient.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{
+		LabelSelector: "app=mysql-master",
+	})
 	if err != nil {
 		return fmt.Errorf("检查MySQL Master状态失败: %w", err)
 	}
 
 	if m.logger != nil {
 		m.logger.Info("MySQL Master状态:")
-		m.logger.Info(string(output))
+		for _, pod := range masterPods.Items {
+			m.logger.Info("  Pod: %s, 状态: %s", pod.Name, pod.Status.Phase)
+		}
 	}
 
 	// 如果有Slave节点，检查Slave状态
 	if m.hasSlaveNode() {
-		cmd = m.buildSSHCommand(m.config.Hosts[0], "kubectl get pods -l app=mysql-slave -n rbd-system")
-		output, err = cmd.Output()
+		slavePods, err := m.kubeClient.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{
+			LabelSelector: "app=mysql-slave",
+		})
 		if err != nil {
 			return fmt.Errorf("检查MySQL Slave状态失败: %w", err)
 		}
 
 		if m.logger != nil {
 			m.logger.Info("MySQL Slave状态:")
-			m.logger.Info(string(output))
+			for _, pod := range slavePods.Items {
+				m.logger.Info("  Pod: %s, 状态: %s", pod.Name, pod.Status.Phase)
+			}
 		}
 	}
 
 	// 检查Service状态
-	cmd = m.buildSSHCommand(m.config.Hosts[0], "kubectl get svc -l app=mysql-master -n rbd-system")
-	output, err = cmd.Output()
+	services, err := m.kubeClient.CoreV1().Services(namespace).List(context.TODO(), metav1.ListOptions{
+		LabelSelector: "app=mysql-master",
+	})
 	if err != nil {
 		return fmt.Errorf("检查MySQL服务状态失败: %w", err)
 	}
 
 	if m.logger != nil {
 		m.logger.Info("MySQL服务状态:")
-		m.logger.Info(string(output))
+		for _, svc := range services.Items {
+			m.logger.Info("  Service: %s, ClusterIP: %s", svc.Name, svc.Spec.ClusterIP)
+		}
 	}
 
 	return nil
@@ -970,58 +915,9 @@ func (m *MySQLInstaller) applyYAMLOnFirstNode(yamlContent, component string) err
 		}
 	}
 
-	// 解析YAML并应用资源
-	decoder := yaml.NewYAMLOrJSONDecoder(strings.NewReader(yamlContent), 4096)
-	for {
-		var obj map[string]interface{}
-		if err := decoder.Decode(&obj); err != nil {
-			if err.Error() == "EOF" {
-				break
-			}
-			return fmt.Errorf("解析YAML失败: %w", err)
-		}
-
-		if obj == nil {
-			continue
-		}
-
-		// 获取资源类型和基本信息
-		kind, ok := obj["kind"].(string)
-		if !ok {
-			continue
-		}
-
-		metadata, ok := obj["metadata"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		name, ok := metadata["name"].(string)
-		if !ok {
-			continue
-		}
-
-		namespace := "rbd-system" // 默认命名空间
-
-		// 根据资源类型创建对应的资源
-		switch kind {
-		case "Service":
-			if err := m.applyService(obj, name, namespace); err != nil {
-				return fmt.Errorf("创建Service %s失败: %w", name, err)
-			}
-		case "StatefulSet":
-			if err := m.applyStatefulSet(obj, name, namespace); err != nil {
-				return fmt.Errorf("创建StatefulSet %s失败: %w", name, err)
-			}
-		case "Job":
-			if err := m.applyJob(obj, name, namespace); err != nil {
-				return fmt.Errorf("创建Job %s失败: %w", name, err)
-			}
-		default:
-			if m.logger != nil {
-				m.logger.Warn("跳过不支持的资源类型: %s", kind)
-			}
-		}
+	// 使用Kubernetes API解析和创建资源
+	if err := m.applyYAMLContent(yamlContent); err != nil {
+		return fmt.Errorf("部署%s失败: %w", component, err)
 	}
 
 	if m.logger != nil {
@@ -1030,33 +926,58 @@ func (m *MySQLInstaller) applyYAMLOnFirstNode(yamlContent, component string) err
 	return nil
 }
 
-// applyService 创建Service资源
-func (m *MySQLInstaller) applyService(obj map[string]interface{}, name, namespace string) error {
-	// 这里可以添加更详细的Service创建逻辑，暂时简化处理
-	if m.logger != nil {
-		m.logger.Debug("创建Service: %s", name)
+// applyYAMLContent 解析YAML内容并使用Kubernetes API创建资源
+func (m *MySQLInstaller) applyYAMLContent(yamlContent string) error {
+	// 创建解码器
+	decoder := serializer.NewCodecFactory(scheme.Scheme).UniversalDeserializer()
+	
+	// 按文档分割YAML内容
+	docs := strings.Split(yamlContent, "---")
+	
+	for _, doc := range docs {
+		doc = strings.TrimSpace(doc)
+		if doc == "" || strings.HasPrefix(doc, "#") {
+			continue
+		}
+
+		// 解析YAML文档
+		obj, gvk, err := decoder.Decode([]byte(doc), nil, nil)
+		if err != nil {
+			if m.logger != nil {
+				m.logger.Warn("跳过无法解析的YAML文档: %v", err)
+			}
+			continue
+		}
+
+		// 根据对象类型创建资源
+		if err := m.createKubernetesResource(obj, gvk); err != nil {
+			return fmt.Errorf("创建资源失败: %w", err)
+		}
 	}
-	// 实际实现中需要将map转换为corev1.Service对象
+
 	return nil
 }
 
-// applyStatefulSet 创建StatefulSet资源
-func (m *MySQLInstaller) applyStatefulSet(obj map[string]interface{}, name, namespace string) error {
-	if m.logger != nil {
-		m.logger.Debug("创建StatefulSet: %s", name)
+// createKubernetesResource 根据资源类型创建Kubernetes资源
+func (m *MySQLInstaller) createKubernetesResource(obj runtime.Object, gvk *schema.GroupVersionKind) error {
+	switch gvk.Kind {
+	case "Service":
+		service := obj.(*corev1.Service)
+		return m.createOrUpdateService(service)
+	case "StatefulSet":
+		statefulSet := obj.(*appsv1.StatefulSet)
+		return m.createOrUpdateStatefulSet(statefulSet)
+	case "Job":
+		job := obj.(*batchv1.Job)
+		return m.createOrUpdateJob(job)
+	default:
+		if m.logger != nil {
+			m.logger.Warn("不支持的资源类型: %s", gvk.Kind)
+		}
+		return nil
 	}
-	// 实际实现中需要将map转换为appsv1.StatefulSet对象
-	return nil
 }
 
-// applyJob 创建Job资源
-func (m *MySQLInstaller) applyJob(obj map[string]interface{}, name, namespace string) error {
-	if m.logger != nil {
-		m.logger.Debug("创建Job: %s", name)
-	}
-	// 实际实现中需要将map转换为batchv1.Job对象
-	return nil
-}
 
 // waitForPodsReady 等待指定标签的Pod就绪
 func (m *MySQLInstaller) waitForPodsReady(labelSelector string, componentName string) error {
@@ -1088,6 +1009,102 @@ func (m *MySQLInstaller) waitForPodsReady(labelSelector string, componentName st
 		if m.logger != nil {
 			m.logger.Debug("等待%s就绪... (%d/60)", componentName, i+1)
 		}
+	}
+
+	return nil
+}
+
+// createOrUpdateService 创建或更新Service
+func (m *MySQLInstaller) createOrUpdateService(service *corev1.Service) error {
+	if m.logger != nil {
+		m.logger.Debug("创建Service: %s/%s", service.Namespace, service.Name)
+	}
+
+	// 检查Service是否已存在
+	existingService, err := m.kubeClient.CoreV1().Services(service.Namespace).Get(context.TODO(), service.Name, metav1.GetOptions{})
+	if err == nil {
+		// Service已存在，更新它
+		service.ResourceVersion = existingService.ResourceVersion
+		service.Spec.ClusterIP = existingService.Spec.ClusterIP // 保持ClusterIP不变
+		_, err = m.kubeClient.CoreV1().Services(service.Namespace).Update(context.TODO(), service, metav1.UpdateOptions{})
+		if err != nil {
+			return fmt.Errorf("更新Service %s失败: %w", service.Name, err)
+		}
+		if m.logger != nil {
+			m.logger.Info("Service %s/%s 已更新", service.Namespace, service.Name)
+		}
+	} else {
+		// Service不存在，创建它
+		_, err = m.kubeClient.CoreV1().Services(service.Namespace).Create(context.TODO(), service, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("创建Service %s失败: %w", service.Name, err)
+		}
+		if m.logger != nil {
+			m.logger.Info("Service %s/%s 已创建", service.Namespace, service.Name)
+		}
+	}
+
+	return nil
+}
+
+// createOrUpdateStatefulSet 创建或更新StatefulSet
+func (m *MySQLInstaller) createOrUpdateStatefulSet(statefulSet *appsv1.StatefulSet) error {
+	if m.logger != nil {
+		m.logger.Debug("创建StatefulSet: %s/%s", statefulSet.Namespace, statefulSet.Name)
+	}
+
+	// 检查StatefulSet是否已存在
+	existingStatefulSet, err := m.kubeClient.AppsV1().StatefulSets(statefulSet.Namespace).Get(context.TODO(), statefulSet.Name, metav1.GetOptions{})
+	if err == nil {
+		// StatefulSet已存在，更新它
+		statefulSet.ResourceVersion = existingStatefulSet.ResourceVersion
+		_, err = m.kubeClient.AppsV1().StatefulSets(statefulSet.Namespace).Update(context.TODO(), statefulSet, metav1.UpdateOptions{})
+		if err != nil {
+			return fmt.Errorf("更新StatefulSet %s失败: %w", statefulSet.Name, err)
+		}
+		if m.logger != nil {
+			m.logger.Info("StatefulSet %s/%s 已更新", statefulSet.Namespace, statefulSet.Name)
+		}
+	} else {
+		// StatefulSet不存在，创建它
+		_, err = m.kubeClient.AppsV1().StatefulSets(statefulSet.Namespace).Create(context.TODO(), statefulSet, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("创建StatefulSet %s失败: %w", statefulSet.Name, err)
+		}
+		if m.logger != nil {
+			m.logger.Info("StatefulSet %s/%s 已创建", statefulSet.Namespace, statefulSet.Name)
+		}
+	}
+
+	return nil
+}
+
+// createOrUpdateJob 创建或更新Job
+func (m *MySQLInstaller) createOrUpdateJob(job *batchv1.Job) error {
+	if m.logger != nil {
+		m.logger.Debug("创建Job: %s/%s", job.Namespace, job.Name)
+	}
+
+	// 对于Job，通常我们需要先删除现有的，然后创建新的
+	// 因为Job的spec字段通常是不可变的
+	err := m.kubeClient.BatchV1().Jobs(job.Namespace).Delete(context.TODO(), job.Name, metav1.DeleteOptions{})
+	if err != nil && !strings.Contains(err.Error(), "not found") {
+		if m.logger != nil {
+			m.logger.Warn("删除现有Job %s时出错: %v", job.Name, err)
+		}
+	}
+
+	// 等待Job删除完成
+	time.Sleep(2 * time.Second)
+
+	// 创建新的Job
+	_, err = m.kubeClient.BatchV1().Jobs(job.Namespace).Create(context.TODO(), job, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("创建Job %s失败: %w", job.Name, err)
+	}
+
+	if m.logger != nil {
+		m.logger.Info("Job %s/%s 已创建", job.Namespace, job.Name)
 	}
 
 	return nil
