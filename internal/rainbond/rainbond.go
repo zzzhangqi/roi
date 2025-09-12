@@ -1,12 +1,22 @@
 package rainbond
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/rainbond/rainbond-offline-installer/pkg/config"
-	"gopkg.in/yaml.v3"
+	"helm.sh/helm/v3/pkg/action"
+	"helm.sh/helm/v3/pkg/chart/loader"
+	"helm.sh/helm/v3/pkg/cli"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // Logger 定义日志接口
@@ -28,10 +38,14 @@ type StepProgress interface {
 }
 
 type RainbondInstaller struct {
-	config       *config.Config
-	logger       Logger
-	stepProgress StepProgress
-	chartPath    string
+	config         *config.Config
+	logger         Logger
+	stepProgress   StepProgress
+	chartPath      string
+	kubeConfig     *rest.Config
+	kubeClient     kubernetes.Interface
+	helmSettings   *cli.EnvSettings
+	actionConfig   *action.Configuration
 }
 
 func NewRainbondInstaller(cfg *config.Config) *RainbondInstaller {
@@ -43,16 +57,143 @@ func NewRainbondInstallerWithLogger(cfg *config.Config, logger Logger) *Rainbond
 }
 
 func NewRainbondInstallerWithLoggerAndProgress(cfg *config.Config, logger Logger, stepProgress StepProgress) *RainbondInstaller {
-	return &RainbondInstaller{
+	r := &RainbondInstaller{
 		config:       cfg,
 		logger:       logger,
 		stepProgress: stepProgress,
-		chartPath:    "./rainbond-chart", // 默认chart路径
+		chartPath:    "./rainbond.tgz", // 使用tgz包
 	}
+	// 初始化Kubernetes客户端和Helm配置
+	if err := r.initializeClients(); err != nil {
+		if logger != nil {
+			logger.Error("初始化Kubernetes和Helm客户端失败: %v", err)
+		}
+	}
+	return r
 }
 
 func (r *RainbondInstaller) SetChartPath(path string) {
 	r.chartPath = path
+}
+
+// 初始化Kubernetes客户端和Helm配置
+func (r *RainbondInstaller) initializeClients() error {
+	// 获取kubeconfig
+	kubeConfigPath, err := r.getKubeConfig()
+	if err != nil {
+		return fmt.Errorf("获取kubeconfig失败: %w", err)
+	}
+
+	// 创建Kubernetes配置
+	config, err := clientcmd.BuildConfigFromFlags("", kubeConfigPath)
+	if err != nil {
+		return fmt.Errorf("构建Kubernetes配置失败: %w", err)
+	}
+	r.kubeConfig = config
+
+	// 创建Kubernetes客户端
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return fmt.Errorf("创建Kubernetes客户端失败: %w", err)
+	}
+	r.kubeClient = clientset
+
+	// 初始化Helm设置
+	r.helmSettings = cli.New()
+	
+	// 创建Helm action配置
+	actionConfig := new(action.Configuration)
+	if err := actionConfig.Init(r.helmSettings.RESTClientGetter(), "", "", func(format string, v ...interface{}) {
+		if r.logger != nil {
+			r.logger.Debug(format, v...)
+		}
+	}); err != nil {
+		return fmt.Errorf("初始化Helm action配置失败: %w", err)
+	}
+	r.actionConfig = actionConfig
+
+	return nil
+}
+
+// 获取kubeconfig文件路径
+func (r *RainbondInstaller) getKubeConfig() (string, error) {
+	// 优先使用RKE2模块保存的本地kubeconfig文件
+	localKubeConfigPath := "./kubeconfig"
+	
+	// 检查本地kubeconfig是否存在
+	if _, err := os.Stat(localKubeConfigPath); err == nil {
+		if r.logger != nil {
+			r.logger.Info("使用RKE2安装时保存的本地kubeconfig文件")
+		}
+		return localKubeConfigPath, nil
+	}
+	
+	// 如果本地文件不存在，回退到从远程获取（兼容性）
+	controlNode := r.config.Hosts[0]
+	fallbackPath := "/tmp/kubeconfig"
+	
+	if r.logger != nil {
+		r.logger.Warn("本地kubeconfig文件不存在，从控制节点 %s 获取kubeconfig...", controlNode.IP)
+	}
+	
+	// 使用scp复制kubeconfig到本地
+	var scpCmd []string
+	if controlNode.Password != "" {
+		scpCmd = []string{"sshpass", "-p", controlNode.Password, "scp",
+			"-o", "StrictHostKeyChecking=no",
+			"-o", "UserKnownHostsFile=/dev/null",
+			fmt.Sprintf("%s@%s:/etc/rancher/rke2/rke2.yaml", controlNode.User, controlNode.IP),
+			fallbackPath}
+	} else if controlNode.SSHKey != "" {
+		scpCmd = []string{"scp", "-i", controlNode.SSHKey,
+			"-o", "StrictHostKeyChecking=no", 
+			"-o", "UserKnownHostsFile=/dev/null",
+			fmt.Sprintf("%s@%s:/etc/rancher/rke2/rke2.yaml", controlNode.User, controlNode.IP),
+			fallbackPath}
+	} else {
+		scpCmd = []string{"scp",
+			"-o", "StrictHostKeyChecking=no",
+			"-o", "UserKnownHostsFile=/dev/null", 
+			fmt.Sprintf("%s@%s:/etc/rancher/rke2/rke2.yaml", controlNode.User, controlNode.IP),
+			fallbackPath}
+	}
+
+	// 执行scp命令
+	cmd := r.buildCommand(scpCmd[0], scpCmd[1:]...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("复制kubeconfig失败: %w, 输出: %s", err, string(output))
+	}
+	
+	// 修改server地址为实际IP
+	if err := r.updateKubeConfigServer(fallbackPath, controlNode.IP); err != nil {
+		return "", fmt.Errorf("更新kubeconfig server地址失败: %w", err)
+	}
+	
+	return fallbackPath, nil
+}
+
+// 更新kubeconfig中的server地址
+func (r *RainbondInstaller) updateKubeConfigServer(kubeconfigPath, serverIP string) error {
+	// 读取kubeconfig文件
+	data, err := os.ReadFile(kubeconfigPath)
+	if err != nil {
+		return err
+	}
+
+	// 替换server地址
+	content := strings.ReplaceAll(string(data), "https://127.0.0.1:6443", fmt.Sprintf("https://%s:6443", serverIP))
+	
+	// 写回文件
+	return os.WriteFile(kubeconfigPath, []byte(content), 0644)
+}
+
+// 执行命令的通用方法
+func (r *RainbondInstaller) executeCommand(name string, args ...string) error {
+	cmd := r.buildCommand(name, args...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("命令执行失败: %w, 输出: %s", err, string(output))
+	}
+	return nil
 }
 
 func (r *RainbondInstaller) Run() error {
@@ -60,14 +201,16 @@ func (r *RainbondInstaller) Run() error {
 		r.logger.Info("开始安装Rainbond...")
 	}
 
+	// 确保客户端已初始化
+	if r.kubeClient == nil || r.actionConfig == nil {
+		if err := r.initializeClients(); err != nil {
+			return fmt.Errorf("初始化客户端失败: %w", err)
+		}
+	}
+
 	// 检查Kubernetes集群状态
 	if err := r.checkKubernetesReady(); err != nil {
 		return fmt.Errorf("Kubernetes集群未就绪: %w", err)
-	}
-
-	// 检查Helm是否可用
-	if err := r.checkHelmAvailable(); err != nil {
-		return fmt.Errorf("Helm不可用: %w", err)
 	}
 
 	// 检查现有Rainbond部署
@@ -85,19 +228,19 @@ func (r *RainbondInstaller) Run() error {
 		return fmt.Errorf("创建命名空间失败: %w", err)
 	}
 
-	// 生成values文件
-	valuesFile, err := r.generateValuesFile()
+	// 生成values配置
+	values, err := r.generateValues()
 	if err != nil {
-		return fmt.Errorf("生成values文件失败: %w", err)
+		return fmt.Errorf("生成values配置失败: %w", err)
 	}
 
 	// 安装Rainbond Helm Chart
-	if err := r.installHelmChart(valuesFile); err != nil {
+	if err := r.installHelmChart(values); err != nil {
 		return fmt.Errorf("安装Rainbond失败: %w", err)
 	}
 
 	if r.logger != nil {
-		r.logger.Info("🎉 Rainbond Helm安装命令执行完成!")
+		r.logger.Info("🎉 Rainbond Helm安装完成!")
 	}
 	return nil
 }
@@ -107,114 +250,33 @@ func (r *RainbondInstaller) checkKubernetesReady() error {
 		r.logger.Info("检查Kubernetes集群状态...")
 	}
 
-	cmd := r.buildSSHCommand(r.config.Hosts[0], "kubectl get nodes")
-	output, err := cmd.CombinedOutput()
+	// 使用Kubernetes客户端直接检查节点状态
+	nodes, err := r.kubeClient.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
-		return fmt.Errorf("kubectl命令执行失败: %w, 输出: %s", err, string(output))
+		return fmt.Errorf("获取节点列表失败: %w", err)
 	}
 
-	if strings.Contains(string(output), "Ready") {
-		if r.logger != nil {
-			r.logger.Info("Kubernetes集群已就绪")
+	readyNodes := 0
+	for _, node := range nodes.Items {
+		for _, condition := range node.Status.Conditions {
+			if condition.Type == corev1.NodeReady && condition.Status == corev1.ConditionTrue {
+				readyNodes++
+				break
+			}
 		}
-		return nil
 	}
 
-	return fmt.Errorf("Kubernetes集群未就绪")
-}
-
-func (r *RainbondInstaller) checkHelmAvailable() error {
-	if r.logger != nil {
-		r.logger.Info("检查Helm可用性...")
-	}
-
-	// 检查当前目录是否有helm二进制
-	helmPath := "./helm"
-	if err := exec.Command("test", "-f", helmPath).Run(); err != nil {
-		return fmt.Errorf("当前目录未找到helm二进制文件")
-	}
-
-	// 检查第一台节点是否有helm
-	cmd := r.buildSSHCommand(r.config.Hosts[0], "which helm")
-	if err := cmd.Run(); err != nil {
-		if r.logger != nil {
-			r.logger.Info("第一台节点未找到helm，正在安装...")
-		}
-		if err := r.installHelmBinary(); err != nil {
-			return fmt.Errorf("安装helm二进制失败: %w", err)
-		}
-	} else {
-		if r.logger != nil {
-			r.logger.Info("第一台节点已安装helm")
-		}
+	if readyNodes == 0 {
+		return fmt.Errorf("没有就绪的节点")
 	}
 
 	if r.logger != nil {
-		r.logger.Info("Helm可用")
+		r.logger.Info("Kubernetes集群已就绪，%d 个节点就绪", readyNodes)
 	}
 	return nil
 }
 
-func (r *RainbondInstaller) installHelmBinary() error {
-	if r.logger != nil {
-		r.logger.Info("复制helm二进制到第一台节点...")
-	}
 
-	helmPath := "./helm"
-	host := r.config.Hosts[0]
-	
-	if r.logger != nil {
-		r.logger.Info("正在向节点 %s 安装helm...", host.IP)
-	}
-
-	// 复制helm二进制到远程节点
-	var scpCmd *exec.Cmd
-	if host.Password != "" {
-		if _, err := exec.LookPath("sshpass"); err == nil {
-			scpCmd = exec.Command("sshpass", "-p", host.Password, "scp",
-				"-o", "StrictHostKeyChecking=no",
-				"-o", "UserKnownHostsFile=/dev/null",
-				helmPath,
-				fmt.Sprintf("%s@%s:/tmp/helm", host.User, host.IP))
-		} else {
-			return fmt.Errorf("需要sshpass来支持密码认证的文件传输")
-		}
-	} else if host.SSHKey != "" {
-		scpCmd = exec.Command("scp",
-			"-i", host.SSHKey,
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "UserKnownHostsFile=/dev/null",
-			helmPath,
-			fmt.Sprintf("%s@%s:/tmp/helm", host.User, host.IP))
-	} else {
-		scpCmd = exec.Command("scp",
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "UserKnownHostsFile=/dev/null",
-			helmPath,
-			fmt.Sprintf("%s@%s:/tmp/helm", host.User, host.IP))
-	}
-
-	if output, err := scpCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("复制helm到节点 %s 失败: %w, 输出: %s", host.IP, err, string(output))
-	}
-
-	// 移动helm到/usr/local/bin并设置权限
-	installCmd := r.buildSSHCommand(host, "sudo mv /tmp/helm /usr/local/bin/helm && sudo chmod +x /usr/local/bin/helm")
-	if output, err := installCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("安装helm到节点 %s 失败: %w, 输出: %s", host.IP, err, string(output))
-	}
-
-	// 验证安装
-	verifyCmd := r.buildSSHCommand(host, "helm version --short")
-	if output, err := verifyCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("验证helm安装失败，节点 %s: %w, 输出: %s", host.IP, err, string(output))
-	}
-
-	if r.logger != nil {
-		r.logger.Info("节点 %s helm安装成功", host.IP)
-	}
-	return nil
-}
 
 func (r *RainbondInstaller) checkExistingDeployment() (bool, error) {
 	if r.logger != nil {
@@ -226,9 +288,21 @@ func (r *RainbondInstaller) checkExistingDeployment() (bool, error) {
 		namespace = "rbd-system"
 	}
 
-	cmd := r.buildSSHCommand(r.config.Hosts[0], fmt.Sprintf("kubectl get rainbondcluster -n %s", namespace))
-	err := cmd.Run()
-	return err == nil, nil
+	// 使用Helm API检查是否已安装
+	list := action.NewList(r.actionConfig)
+	list.SetStateMask()
+	releases, err := list.Run()
+	if err != nil {
+		return false, err
+	}
+
+	for _, rel := range releases {
+		if rel.Name == "rainbond" && rel.Namespace == namespace {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 func (r *RainbondInstaller) createNamespace() error {
@@ -241,9 +315,9 @@ func (r *RainbondInstaller) createNamespace() error {
 		r.logger.Info("创建命名空间 %s...", namespace)
 	}
 
-	// 检查命名空间是否已存在
-	cmd := r.buildSSHCommand(r.config.Hosts[0], fmt.Sprintf("kubectl get namespace %s", namespace))
-	if err := cmd.Run(); err == nil {
+	// 使用Kubernetes客户端检查命名空间是否已存在
+	_, err := r.kubeClient.CoreV1().Namespaces().Get(context.TODO(), namespace, metav1.GetOptions{})
+	if err == nil {
 		if r.logger != nil {
 			r.logger.Info("命名空间 %s 已存在，跳过创建", namespace)
 		}
@@ -251,10 +325,15 @@ func (r *RainbondInstaller) createNamespace() error {
 	}
 
 	// 创建命名空间
-	cmd = r.buildSSHCommand(r.config.Hosts[0], fmt.Sprintf("kubectl create namespace %s", namespace))
-	output, err := cmd.CombinedOutput()
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: namespace,
+		},
+	}
+
+	_, err = r.kubeClient.CoreV1().Namespaces().Create(context.TODO(), ns, metav1.CreateOptions{})
 	if err != nil {
-		return fmt.Errorf("创建命名空间失败: %w, 输出: %s", err, string(output))
+		return fmt.Errorf("创建命名空间失败: %w", err)
 	}
 
 	if r.logger != nil {
@@ -263,9 +342,9 @@ func (r *RainbondInstaller) createNamespace() error {
 	return nil
 }
 
-func (r *RainbondInstaller) generateValuesFile() (string, error) {
+func (r *RainbondInstaller) generateValues() (map[string]interface{}, error) {
 	if r.logger != nil {
-		r.logger.Info("重新生成Helm values文件（基于最新配置）...")
+		r.logger.Info("生成Helm values配置...")
 	}
 
 	// 合并默认配置和用户配置
@@ -315,53 +394,13 @@ func (r *RainbondInstaller) generateValuesFile() (string, error) {
 		}
 	}
 
-	// 转换为YAML，设置正确的缩进
-	encoder := yaml.NewEncoder(nil)
-	encoder.SetIndent(4) // 设置4个空格缩进
-	
-	var yamlBuffer strings.Builder
-	encoder = yaml.NewEncoder(&yamlBuffer)
-	encoder.SetIndent(4)
-	
-	err := encoder.Encode(values)
-	if err != nil {
-		return "", fmt.Errorf("序列化values失败: %w", err)
-	}
-	encoder.Close()
-	
-	yamlData := yamlBuffer.String()
-
-	// 写入临时文件，每次重新生成确保使用最新配置
-	valuesFile := "/tmp/rainbond-values.yaml"
-	
-	// 先删除旧的values文件
-	cleanCmd := r.buildSSHCommand(r.config.Hosts[0], fmt.Sprintf("rm -f %s", valuesFile))
-	cleanCmd.Run() // 忽略删除错误
-	
-	// 写入新的values文件
-	writeCmd := fmt.Sprintf("cat > %s << 'EOF'\n%s\nEOF", valuesFile, yamlData)
-
-	cmd := r.buildSSHCommand(r.config.Hosts[0], writeCmd)
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("写入values文件失败: %w", err)
-	}
-
 	if r.logger != nil {
-		r.logger.Info("Values文件已重新生成并保存至: %s", valuesFile)
+		r.logger.Info("Values配置生成完成")
 	}
-	if len(yamlData) > 200 {
-		if r.logger != nil {
-			r.logger.Debug("Values内容预览: %s...", yamlData[:200])
-		}
-	} else {
-		if r.logger != nil {
-			r.logger.Debug("Values内容: %s", yamlData)
-		}
-	}
-	return valuesFile, nil
+	return values, nil
 }
 
-func (r *RainbondInstaller) installHelmChart(valuesFile string) error {
+func (r *RainbondInstaller) installHelmChart(values map[string]interface{}) error {
 	if r.logger != nil {
 		r.logger.Info("开始安装Rainbond Helm Chart...")
 	}
@@ -371,122 +410,50 @@ func (r *RainbondInstaller) installHelmChart(valuesFile string) error {
 		namespace = "rbd-system"
 	}
 
-	// 构建helm install命令
 	releaseName := "rainbond"
 
-	// 先将chart tgz包传输到远程节点
-	if err := r.transferChartToRemote(); err != nil {
-		return fmt.Errorf("传输chart包到远程节点失败: %w", err)
+	// 检查chart包是否存在
+	if _, err := os.Stat(r.chartPath); os.IsNotExist(err) {
+		return fmt.Errorf("chart包不存在: %s", r.chartPath)
 	}
 
-	remoteTgzPath := "/tmp/rainbond.tgz"
-	helmCmd := fmt.Sprintf("helm install %s %s --namespace %s --values %s --create-namespace --wait --timeout=20m",
-		releaseName, remoteTgzPath, namespace, valuesFile)
+	// 加载chart
+	chart, err := loader.Load(r.chartPath)
+	if err != nil {
+		return fmt.Errorf("加载chart失败: %w", err)
+	}
+
+	// 创建Helm install action
+	install := action.NewInstall(r.actionConfig)
+	install.ReleaseName = releaseName
+	install.Namespace = namespace
+	install.CreateNamespace = true
+	install.Wait = true
+	install.Timeout = 20 * time.Minute // 20分钟超时
 
 	if r.logger != nil {
-		r.logger.Info("执行helm install: %s", helmCmd)
+		r.logger.Info("使用Helm SDK安装chart: %s 到命名空间: %s", releaseName, namespace)
 	}
-	cmd := r.buildSSHCommand(r.config.Hosts[0], helmCmd)
-	
-	// 设置较长的超时时间
-	output, err := cmd.CombinedOutput()
+
+	// 执行安装
+	rel, err := install.Run(chart, values)
 	if err != nil {
 		if r.logger != nil {
-			r.logger.Error("Helm安装输出: %s", string(output))
+			r.logger.Error("Helm安装失败: %v", err)
 		}
 		return fmt.Errorf("helm install失败: %w", err)
 	}
 
 	if r.logger != nil {
 		r.logger.Info("Rainbond Helm Chart安装成功")
-		r.logger.Info("Helm安装输出: %s", string(output))
+		r.logger.Info("Release名称: %s, 版本: %d, 状态: %s", 
+			rel.Name, rel.Version, rel.Info.Status)
 	}
 	return nil
 }
 
-func (r *RainbondInstaller) transferChartToRemote() error {
-	if r.logger != nil {
-		r.logger.Info("传输Helm Chart包到远程节点...")
-	}
-
-	host := r.config.Hosts[0]
-	
-	// 检查是否有现成的tgz包
-	tgzPath := "./rainbond.tgz"
-	if err := exec.Command("test", "-f", tgzPath).Run(); err != nil {
-		return fmt.Errorf("未找到rainbond.tgz包文件")
-	}
-
-	// 传输tgz包到远程节点
-	var scpCmd *exec.Cmd
-	if host.Password != "" {
-		if _, err := exec.LookPath("sshpass"); err == nil {
-			scpCmd = exec.Command("sshpass", "-p", host.Password, "scp",
-				"-o", "StrictHostKeyChecking=no",
-				"-o", "UserKnownHostsFile=/dev/null",
-				tgzPath,
-				fmt.Sprintf("%s@%s:/tmp/rainbond.tgz", host.User, host.IP))
-		} else {
-			return fmt.Errorf("需要sshpass来支持密码认证的文件传输")
-		}
-	} else if host.SSHKey != "" {
-		scpCmd = exec.Command("scp",
-			"-i", host.SSHKey,
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "UserKnownHostsFile=/dev/null",
-			tgzPath,
-			fmt.Sprintf("%s@%s:/tmp/rainbond.tgz", host.User, host.IP))
-	} else {
-		scpCmd = exec.Command("scp",
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "UserKnownHostsFile=/dev/null",
-			tgzPath,
-			fmt.Sprintf("%s@%s:/tmp/rainbond.tgz", host.User, host.IP))
-	}
-
-	if output, err := scpCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("传输tgz包失败: %w, 输出: %s", err, string(output))
-	}
-
-	if r.logger != nil {
-		r.logger.Info("Chart tgz包传输完成")
-	}
-	return nil
+// buildCommand 构建命令的通用方法
+func (r *RainbondInstaller) buildCommand(name string, args ...string) *exec.Cmd {
+	return exec.Command(name, args...)
 }
 
-
-func (r *RainbondInstaller) buildSSHCommand(host config.Host, command string) *exec.Cmd {
-	var sshCmd *exec.Cmd
-
-	if host.Password != "" {
-		if _, err := exec.LookPath("sshpass"); err == nil {
-			sshCmd = exec.Command("sshpass", "-p", host.Password, "ssh",
-				"-o", "StrictHostKeyChecking=no",
-				"-o", "UserKnownHostsFile=/dev/null",
-				fmt.Sprintf("%s@%s", host.User, host.IP),
-				command)
-		} else {
-			sshCmd = exec.Command("ssh",
-				"-o", "StrictHostKeyChecking=no",
-				"-o", "UserKnownHostsFile=/dev/null",
-				"-o", "BatchMode=no",
-				fmt.Sprintf("%s@%s", host.User, host.IP),
-				command)
-		}
-	} else if host.SSHKey != "" {
-		sshCmd = exec.Command("ssh",
-			"-i", host.SSHKey,
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "UserKnownHostsFile=/dev/null",
-			fmt.Sprintf("%s@%s", host.User, host.IP),
-			command)
-	} else {
-		sshCmd = exec.Command("ssh",
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "UserKnownHostsFile=/dev/null",
-			fmt.Sprintf("%s@%s", host.User, host.IP),
-			command)
-	}
-
-	return sshCmd
-}

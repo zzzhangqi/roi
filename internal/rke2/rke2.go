@@ -179,6 +179,17 @@ func (r *RKE2Installer) Run() error {
 			}
 		}
 
+		// 保存kubeconfig到本地以供Rainbond模块使用
+		if err := r.saveKubeConfigToLocal(*firstEtcdHost); err != nil {
+			if r.logger != nil {
+				r.logger.Warn("保存kubeconfig到本地失败: %v", err)
+			}
+		} else {
+			if r.logger != nil {
+				r.logger.Info("kubeconfig已保存到本地: ./kubeconfig")
+			}
+		}
+
 		if r.logger != nil {
 			r.logger.Info("RKE2集群已完成! 运行中: %d/%d", runningCount, len(hosts))
 		}
@@ -462,6 +473,17 @@ func (r *RKE2Installer) Run() error {
 		}
 		if r.logger != nil {
 			r.logger.Info("建议等待几分钟后检查服务状态: systemctl status rke2-server 或 rke2-agent")
+		}
+	}
+
+	// 保存kubeconfig到本地以供Rainbond模块使用
+	if err := r.saveKubeConfigToLocal(*firstEtcdHost); err != nil {
+		if r.logger != nil {
+			r.logger.Warn("保存kubeconfig到本地失败: %v", err)
+		}
+	} else {
+		if r.logger != nil {
+			r.logger.Info("kubeconfig已保存到本地: ./kubeconfig")
 		}
 	}
 
@@ -2030,69 +2052,91 @@ func (r *RKE2Installer) waitForNodeReady(host config.Host) error {
 		r.logger.Info("主机 %s: 等待节点就绪", host.IP)
 	}
 
-	waitCmd := `
-		export KUBECONFIG=/root/.kube/config
-		
-		# 等待节点变为Ready状态（最多等待5分钟）
-		timeout=300
-		echo "检查节点就绪状态..."
-		
-		while [ $timeout -gt 0 ]; do
-			# 检查kubectl命令是否存在
-			if [ ! -f /usr/local/bin/kubectl ]; then
-				echo "等待kubectl工具可用... (剩余 $timeout 秒)"
-				sleep 10
-				timeout=$((timeout - 10))
-				continue
-			fi
-			
-			# 检查是否有Ready节点
-			ready_count=$(/usr/local/bin/kubectl get nodes --no-headers 2>/dev/null | grep -c " Ready " 2>/dev/null || echo "0")
-			
-			# 确保ready_count是一个有效数字
-			case "$ready_count" in
-				''|*[!0-9]*) ready_count=0 ;;
-			esac
-			
-			if [ "$ready_count" -gt 0 ]; then
-				echo "发现 $ready_count 个Ready节点!"
-				echo "当前集群状态:"
-				/usr/local/bin/kubectl get nodes
-				echo "节点就绪检查完成"
-				break
-			else
-				echo "等待节点变为Ready状态... (剩余 $timeout 秒)"
-				/usr/local/bin/kubectl get nodes --no-headers 2>/dev/null || echo "暂时无法获取节点信息"
-				sleep 10
-				timeout=$((timeout - 10))
-			fi
-		done
-		
-		if [ $timeout -le 0 ]; then
-			echo "警告: 节点在5分钟内未完全就绪，但这可能是正常的"
-			echo "当前节点状态:"
-			/usr/local/bin/kubectl get nodes 2>/dev/null || echo "无法连接到API server"
-			echo "继续安装流程..."
-		fi
-	`
+	// 首先尝试创建Kubernetes客户端
+	kubeClient, err := r.createKubernetesClient(host)
+	if err != nil {
+		if r.logger != nil {
+			r.logger.Warn("主机 %s: 无法创建Kubernetes客户端，使用轮询等待: %v", host.IP, err)
+		}
+		// 如果无法创建客户端，等待一段时间让RKE2服务启动
+		time.Sleep(30 * time.Second)
+		return nil
+	}
 
-	sshCmd := r.buildSSHCommand(host, waitCmd)
-
-	// 注释掉实时输出，因为Logger接口没有Writer方法
-	// sshCmd.Stdout = r.logger.Writer()
-	// sshCmd.Stderr = r.logger.Writer()
+	// 使用Kubernetes API等待节点就绪（最多等待5分钟）
+	timeout := 300 * time.Second
+	interval := 10 * time.Second
+	deadline := time.Now().Add(timeout)
 
 	if r.logger != nil {
 		r.logger.Info("主机 %s: 开始节点状态检查...", host.IP)
 	}
 
-	if err := sshCmd.Run(); err != nil {
-		return fmt.Errorf("等待节点就绪失败: %w", err)
+	for time.Now().Before(deadline) {
+		// 获取所有节点
+		nodes, err := kubeClient.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
+		if err != nil {
+			if r.logger != nil {
+				r.logger.Debug("主机 %s: 暂时无法获取节点信息，继续等待...", host.IP)
+			}
+			time.Sleep(interval)
+			continue
+		}
+
+		readyCount := 0
+		totalCount := len(nodes.Items)
+		
+		// 检查节点就绪状态
+		for _, node := range nodes.Items {
+			for _, condition := range node.Status.Conditions {
+				if condition.Type == corev1.NodeReady && condition.Status == corev1.ConditionTrue {
+					readyCount++
+					break
+				}
+			}
+		}
+
+		if r.logger != nil {
+			r.logger.Debug("主机 %s: 发现 %d/%d 个Ready节点", host.IP, readyCount, totalCount)
+		}
+
+		if readyCount > 0 {
+			if r.logger != nil {
+				r.logger.Info("主机 %s: 发现 %d 个Ready节点，集群基本就绪", host.IP, readyCount)
+				// 显示节点状态
+				for _, node := range nodes.Items {
+					var status string
+					for _, condition := range node.Status.Conditions {
+						if condition.Type == corev1.NodeReady {
+							if condition.Status == corev1.ConditionTrue {
+								status = "Ready"
+							} else {
+								status = "NotReady"
+							}
+							break
+						}
+					}
+					r.logger.Info("  节点 %s: %s", node.Name, status)
+				}
+				r.logger.Info("主机 %s: 节点就绪检查完成", host.IP)
+			}
+			return nil
+		}
+
+		// 还没有Ready节点，继续等待
+		if r.logger != nil {
+			remaining := time.Until(deadline).Seconds()
+			r.logger.Debug("主机 %s: 等待节点变为Ready状态... (剩余 %.0f 秒)", host.IP, remaining)
+		}
+
+		time.Sleep(interval)
 	}
 
+	// 超时但仍继续，因为这可能是正常的
 	if r.logger != nil {
-		r.logger.Info("主机 %s: 节点就绪检查完成", host.IP)
+		r.logger.Warn("主机 %s: 节点在5分钟内未完全就绪，但这可能是正常的，继续安装流程...", host.IP)
 	}
+
 	return nil
 }
 
@@ -2293,6 +2337,27 @@ func (r *RKE2Installer) getKubeConfig(controlNode config.Host) (*rest.Config, er
 	}
 
 	return restConfig, nil
+}
+
+// saveKubeConfigToLocal 保存kubeconfig到本地文件
+func (r *RKE2Installer) saveKubeConfigToLocal(controlNode config.Host) error {
+	// 从控制节点获取kubeconfig内容
+	cmd := r.buildSSHCommand(controlNode, "cat /etc/rancher/rke2/rke2.yaml")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("从节点 %s 获取kubeconfig失败: %w", controlNode.IP, err)
+	}
+
+	// 修正server地址为控制节点的外网IP
+	content := strings.ReplaceAll(string(output), "https://127.0.0.1:6443", fmt.Sprintf("https://%s:6443", controlNode.IP))
+
+	// 保存到本地文件
+	localKubeConfigPath := "./kubeconfig"
+	if err := os.WriteFile(localKubeConfigPath, []byte(content), 0600); err != nil {
+		return fmt.Errorf("保存kubeconfig到本地失败: %w", err)
+	}
+
+	return nil
 }
 
 // createKubernetesClient 创建Kubernetes客户端
