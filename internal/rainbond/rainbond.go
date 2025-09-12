@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"gopkg.in/yaml.v3"
 )
 
 // Logger 定义日志接口
@@ -562,8 +563,8 @@ func (r *RainbondInstaller) generateValuesFile(values map[string]interface{}) (s
 		return valuesFileName, nil
 	}
 
-	// 转换map为YAML格式
-	yamlContent, err := r.mapToYAML(values)
+	// 使用标准YAML库转换map为YAML格式
+	yamlContent, err := yaml.Marshal(values)
 	if err != nil {
 		return "", fmt.Errorf("转换values为YAML失败: %w", err)
 	}
@@ -575,7 +576,7 @@ func (r *RainbondInstaller) generateValuesFile(values map[string]interface{}) (s
 	}
 
 	// 写入YAML内容
-	if _, err := file.WriteString(yamlContent); err != nil {
+	if _, err := file.Write(yamlContent); err != nil {
 		file.Close()
 		os.Remove(valuesFileName)
 		return "", fmt.Errorf("写入values文件失败: %w", err)
@@ -594,57 +595,6 @@ func (r *RainbondInstaller) generateValuesFile(values map[string]interface{}) (s
 	return valuesFileName, nil
 }
 
-// mapToYAML 简单的map转YAML实现
-func (r *RainbondInstaller) mapToYAML(m map[string]interface{}) (string, error) {
-	var result strings.Builder
-	for key, value := range m {
-		if err := r.writeYAMLValue(&result, key, value, 0); err != nil {
-			return "", err
-		}
-	}
-	return result.String(), nil
-}
-
-// writeYAMLValue 递归写入YAML值
-func (r *RainbondInstaller) writeYAMLValue(w *strings.Builder, key string, value interface{}, indent int) error {
-	spaces := strings.Repeat("  ", indent)
-
-	switch v := value.(type) {
-	case map[string]interface{}:
-		w.WriteString(fmt.Sprintf("%s%s:\n", spaces, key))
-		for k, val := range v {
-			if err := r.writeYAMLValue(w, k, val, indent+1); err != nil {
-				return err
-			}
-		}
-	case []interface{}:
-		w.WriteString(fmt.Sprintf("%s%s:\n", spaces, key))
-		for _, item := range v {
-			w.WriteString(fmt.Sprintf("%s  - ", spaces))
-			if m, ok := item.(map[string]interface{}); ok {
-				w.WriteString("\n")
-				for k, val := range m {
-					if err := r.writeYAMLValue(w, k, val, indent+2); err != nil {
-						return err
-					}
-				}
-			} else {
-				w.WriteString(fmt.Sprintf("%v\n", item))
-			}
-		}
-	case string:
-		w.WriteString(fmt.Sprintf("%s%s: %q\n", spaces, key, v))
-	case bool:
-		w.WriteString(fmt.Sprintf("%s%s: %t\n", spaces, key, v))
-	case int:
-		w.WriteString(fmt.Sprintf("%s%s: %d\n", spaces, key, v))
-	case float64:
-		w.WriteString(fmt.Sprintf("%s%s: %g\n", spaces, key, v))
-	default:
-		w.WriteString(fmt.Sprintf("%s%s: %v\n", spaces, key, v))
-	}
-	return nil
-}
 
 // buildCommand 构建命令的通用方法
 func (r *RainbondInstaller) buildCommand(name string, args ...string) *exec.Cmd {
