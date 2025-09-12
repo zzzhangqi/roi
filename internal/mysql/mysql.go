@@ -637,6 +637,11 @@ func (m *MySQLInstaller) deployMaster() error {
 	}
 
 	// 生成MySQL Master YAML
+	if m.logger != nil {
+		m.logger.Debug("生成MySQL Master YAML，参数: nodeName=%s, rootPassword=%s, replUser=%s, replPassword=%s, dataPath=%s",
+			masterNodeName, m.config.MySQL.RootPassword, m.config.MySQL.ReplUser, m.config.MySQL.ReplPassword, m.config.MySQL.DataPath)
+	}
+	
 	yamlContent := fmt.Sprintf(mysqlMasterYAML,
 		masterNodeName,              // nodeName for direct binding
 		m.config.MySQL.RootPassword, // MYSQL_ROOT_PASSWORD
@@ -644,6 +649,10 @@ func (m *MySQLInstaller) deployMaster() error {
 		m.config.MySQL.ReplPassword, // MYSQL_REPLICATION_PASSWORD
 		m.config.MySQL.DataPath,     // hostPath
 	)
+	
+	if m.logger != nil {
+		m.logger.Debug("生成的MySQL Master YAML长度: %d", len(yamlContent))
+	}
 
 	// 使用Kubernetes API创建资源
 	return m.applyYAMLOnFirstNode(yamlContent, "MySQL Master")
@@ -661,6 +670,11 @@ func (m *MySQLInstaller) deploySlave() error {
 	}
 
 	// 生成MySQL Slave YAML
+	if m.logger != nil {
+		m.logger.Debug("生成MySQL Slave YAML，参数: nodeName=%s, rootPassword=%s, replUser=%s, replPassword=%s, dataPath=%s",
+			slaveNodeName, m.config.MySQL.RootPassword, m.config.MySQL.ReplUser, m.config.MySQL.ReplPassword, m.config.MySQL.DataPath)
+	}
+	
 	yamlContent := fmt.Sprintf(mysqlSlaveYAML,
 		slaveNodeName,               // nodeName for direct binding
 		m.config.MySQL.RootPassword, // MYSQL_MASTER_ROOT_PASSWORD
@@ -668,6 +682,10 @@ func (m *MySQLInstaller) deploySlave() error {
 		m.config.MySQL.ReplPassword, // MYSQL_REPLICATION_PASSWORD
 		m.config.MySQL.DataPath,     // hostPath
 	)
+	
+	if m.logger != nil {
+		m.logger.Debug("生成的MySQL Slave YAML长度: %d", len(yamlContent))
+	}
 
 	// 使用Kubernetes API创建资源
 	return m.applyYAMLOnFirstNode(yamlContent, "MySQL Slave")
@@ -1013,6 +1031,8 @@ func (m *MySQLInstaller) ensureNamespace(namespace string) error {
 func (m *MySQLInstaller) applyYAMLContent(yamlContent string) error {
 	if m.logger != nil {
 		m.logger.Debug("开始解析YAML内容，长度: %d", len(yamlContent))
+		// 输出完整YAML内容用于调试
+		m.logger.Debug("完整YAML内容:\n%s", yamlContent)
 	}
 
 	// 创建解码器
@@ -1024,18 +1044,33 @@ func (m *MySQLInstaller) applyYAMLContent(yamlContent string) error {
 	resourceCount := 0
 	for i, doc := range docs {
 		doc = strings.TrimSpace(doc)
-		if doc == "" || strings.HasPrefix(doc, "#") {
-			if m.logger != nil && doc != "" {
-				m.logger.Debug("跳过注释文档 %d", i)
+		if doc == "" {
+			continue
+		}
+		
+		// 跳过只包含注释的文档，但不跳过包含YAML资源的文档
+		lines := strings.Split(doc, "\n")
+		hasContent := false
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "#") {
+				hasContent = true
+				break
+			}
+		}
+		
+		if !hasContent {
+			if m.logger != nil {
+				m.logger.Debug("跳过纯注释文档 %d", i)
 			}
 			continue
 		}
 
 		if m.logger != nil {
-			m.logger.Debug("解析YAML文档 %d，内容前100字符: %s", i, 
+			m.logger.Debug("解析YAML文档 %d，长度: %d，内容前200字符: %s", i, len(doc),
 				func(s string) string {
-					if len(s) > 100 {
-						return s[:100] + "..."
+					if len(s) > 200 {
+						return s[:200] + "..."
 					}
 					return s
 				}(doc))
