@@ -84,12 +84,20 @@ func (r *RainbondInstaller) initializeClients() error {
 		return fmt.Errorf("获取kubeconfig失败: %w", err)
 	}
 
+	if r.logger != nil {
+		r.logger.Debug("使用kubeconfig文件: %s", kubeConfigPath)
+	}
+
 	// 创建Kubernetes配置
 	config, err := clientcmd.BuildConfigFromFlags("", kubeConfigPath)
 	if err != nil {
 		return fmt.Errorf("构建Kubernetes配置失败: %w", err)
 	}
 	r.kubeConfig = config
+
+	if r.logger != nil {
+		r.logger.Debug("Kubernetes API服务器地址: %s", config.Host)
+	}
 
 	// 创建Kubernetes客户端
 	clientset, err := kubernetes.NewForConfig(config)
@@ -98,19 +106,56 @@ func (r *RainbondInstaller) initializeClients() error {
 	}
 	r.kubeClient = clientset
 
-	// 初始化Helm设置
+	// 测试连接
+	if r.logger != nil {
+		r.logger.Debug("测试Kubernetes集群连接...")
+	}
+	nodes, err := clientset.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("测试Kubernetes连接失败: %w", err)
+	}
+	if r.logger != nil {
+		r.logger.Debug("成功连接到Kubernetes集群，发现 %d 个节点", len(nodes.Items))
+	}
+
+	// 初始化Helm设置，明确指定kubeconfig路径
 	r.helmSettings = cli.New()
+	r.helmSettings.KubeConfig = kubeConfigPath
+	
+	if r.logger != nil {
+		r.logger.Debug("Helm设置kubeconfig路径: %s", kubeConfigPath)
+	}
 	
 	// 创建Helm action配置
 	actionConfig := new(action.Configuration)
-	if err := actionConfig.Init(r.helmSettings.RESTClientGetter(), "", "", func(format string, v ...interface{}) {
+	
+	// 使用空字符串作为namespace，让Helm使用kubeconfig的当前上下文
+	if err := actionConfig.Init(r.helmSettings.RESTClientGetter(), "", "memory", func(format string, v ...interface{}) {
 		if r.logger != nil {
-			r.logger.Debug(format, v...)
+			r.logger.Debug("[Helm] %s", fmt.Sprintf(format, v...))
 		}
 	}); err != nil {
 		return fmt.Errorf("初始化Helm action配置失败: %w", err)
 	}
 	r.actionConfig = actionConfig
+	
+	// 验证Helm配置是否正常工作
+	if r.logger != nil {
+		r.logger.Debug("验证Helm配置...")
+	}
+	testList := action.NewList(actionConfig)
+	testList.SetStateMask()
+	_, testErr := testList.Run()
+	if testErr != nil {
+		if r.logger != nil {
+			r.logger.Warn("Helm配置测试失败: %v", testErr)
+		}
+		// 不返回错误，继续执行，但记录警告
+	} else {
+		if r.logger != nil {
+			r.logger.Debug("Helm配置验证成功")
+		}
+	}
 
 	return nil
 }
@@ -203,8 +248,14 @@ func (r *RainbondInstaller) Run() error {
 
 	// 确保客户端已初始化
 	if r.kubeClient == nil || r.actionConfig == nil {
+		if r.logger != nil {
+			r.logger.Debug("初始化Kubernetes和Helm客户端...")
+		}
 		if err := r.initializeClients(); err != nil {
 			return fmt.Errorf("初始化客户端失败: %w", err)
+		}
+		if r.logger != nil {
+			r.logger.Debug("客户端初始化成功")
 		}
 	}
 
@@ -288,12 +339,28 @@ func (r *RainbondInstaller) checkExistingDeployment() (bool, error) {
 		namespace = "rbd-system"
 	}
 
+	// 确保actionConfig已初始化
+	if r.actionConfig == nil {
+		return false, fmt.Errorf("Helm action配置未初始化")
+	}
+
+	if r.logger != nil {
+		r.logger.Debug("使用Helm API检查现有部署，目标命名空间: %s", namespace)
+	}
+
 	// 使用Helm API检查是否已安装
 	list := action.NewList(r.actionConfig)
 	list.SetStateMask()
 	releases, err := list.Run()
 	if err != nil {
-		return false, err
+		if r.logger != nil {
+			r.logger.Error("Helm列表查询失败: %v", err)
+		}
+		return false, fmt.Errorf("查询Helm releases失败: %w", err)
+	}
+
+	if r.logger != nil {
+		r.logger.Debug("发现 %d 个Helm releases", len(releases))
 	}
 
 	for _, rel := range releases {
