@@ -1,6 +1,7 @@
 package rke2
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,6 +10,11 @@ import (
 	"time"
 
 	"github.com/rainbond/rainbond-offline-installer/pkg/config"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 // Logger 定义日志接口
@@ -47,6 +53,7 @@ type RKE2Installer struct {
 	config       *config.Config
 	logger       Logger
 	stepProgress StepProgress
+	kubeClient   kubernetes.Interface // Kubernetes客户端
 }
 
 type RKE2Status struct {
@@ -1566,26 +1573,52 @@ func (r *RKE2Installer) waitForClusterReady(firstServer config.Host) error {
 	}
 
 	for i := 0; i < 60; i++ { // 最多等待10分钟
-		checkCmd := `
-			export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
-			export PATH=$PATH:/var/lib/rancher/rke2/bin
-			
-			if kubectl get nodes >/dev/null 2>&1; then
-				ready_nodes=$(kubectl get nodes | grep -c "Ready")
-				total_nodes=$(kubectl get nodes --no-headers | wc -l)
-				echo "就绪节点: $ready_nodes/$total_nodes"
-				
-				if [ "$ready_nodes" -eq "$total_nodes" ] && [ "$total_nodes" -gt 0 ]; then
-					echo "集群就绪"
-					exit 0
-				fi
-			fi
-			echo "集群未就绪"
-			exit 1
-		`
+		// 确保Kubernetes客户端已创建
+		if err := r.ensureKubernetesClient(); err != nil {
+			if r.logger != nil {
+				r.logger.Debug("创建Kubernetes客户端失败: %v", err)
+			}
+			time.Sleep(10 * time.Second)
+			continue
+		}
 
-		sshCmd := r.buildSSHCommand(firstServer, checkCmd)
-		if err := sshCmd.Run(); err == nil {
+		// 获取所有节点
+		nodes, err := r.kubeClient.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
+		if err != nil {
+			if r.logger != nil {
+				r.logger.Debug("获取节点列表失败: %v", err)
+			}
+			time.Sleep(10 * time.Second)
+			continue
+		}
+
+		if len(nodes.Items) == 0 {
+			if r.logger != nil {
+				r.logger.Debug("未发现任何Kubernetes节点")
+			}
+			time.Sleep(10 * time.Second)
+			continue
+		}
+
+		// 统计就绪节点数量
+		readyCount := 0
+		totalCount := len(nodes.Items)
+
+		for _, node := range nodes.Items {
+			for _, condition := range node.Status.Conditions {
+				if condition.Type == corev1.NodeReady && condition.Status == corev1.ConditionTrue {
+					readyCount++
+					break
+				}
+			}
+		}
+
+		if r.logger != nil {
+			r.logger.Info("集群节点状态: %d/%d 就绪", readyCount, totalCount)
+		}
+
+		// 检查是否所有节点都就绪
+		if readyCount == totalCount && totalCount > 0 {
 			if r.logger != nil {
 				r.logger.Info("Kubernetes集群已就绪")
 			}
@@ -1664,33 +1697,53 @@ func (r *RKE2Installer) checkRKE2Status() map[string]*RKE2Status {
 
 // checkKubernetesNodeReady 检查Kubernetes节点是否就绪
 func (r *RKE2Installer) checkKubernetesNodeReady(host config.Host) bool {
-	// 从第一个server节点执行kubectl命令检查节点状态
-	firstServer := r.getFirstEtcdHost()
-	if firstServer == nil {
+	// 确保Kubernetes客户端已创建
+	if err := r.ensureKubernetesClient(); err != nil {
 		if r.logger != nil {
-			r.logger.Debug("找不到第一个server节点，无法检查Kubernetes节点状态")
+			r.logger.Debug("创建Kubernetes客户端失败: %v", err)
 		}
 		return false
 	}
 
-	// 使用kubectl检查特定节点是否就绪
-	kubectlCmd := fmt.Sprintf("kubectl get node %s -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null || echo 'NotFound'", host.IP)
-	sshCmd := r.buildSSHCommand(*firstServer, kubectlCmd)
-	output, err := sshCmd.Output()
+	// 获取所有节点
+	nodes, err := r.kubeClient.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		if r.logger != nil {
-			r.logger.Debug("检查节点 %s 的Kubernetes状态失败: %v", host.IP, err)
+			r.logger.Debug("获取节点列表失败: %v", err)
 		}
 		return false
 	}
 
-	nodeStatus := strings.TrimSpace(string(output))
-	if r.logger != nil {
-		r.logger.Debug("节点 %s 的Kubernetes就绪状态: %s", host.IP, nodeStatus)
+	// 查找匹配的节点
+	hostIP := r.getNodeIP(host)
+	for _, node := range nodes.Items {
+		// 通过IP地址匹配节点
+		nodeMatched := false
+		for _, addr := range node.Status.Addresses {
+			if (addr.Type == corev1.NodeInternalIP || addr.Type == corev1.NodeExternalIP) && addr.Address == hostIP {
+				nodeMatched = true
+				break
+			}
+		}
+
+		if nodeMatched {
+			// 检查节点是否就绪
+			for _, condition := range node.Status.Conditions {
+				if condition.Type == corev1.NodeReady {
+					isReady := condition.Status == corev1.ConditionTrue
+					if r.logger != nil {
+						r.logger.Debug("节点 %s (%s) 的Kubernetes就绪状态: %v", hostIP, node.Name, isReady)
+					}
+					return isReady
+				}
+			}
+		}
 	}
-	
-	// 如果节点状态是"True"，表示节点就绪
-	return nodeStatus == "True"
+
+	if r.logger != nil {
+		r.logger.Debug("未找到IP为 %s 的Kubernetes节点", hostIP)
+	}
+	return false
 }
 
 // printRKE2Status 打印RKE2状态到文件，不干扰控制台进度
@@ -2212,10 +2265,81 @@ func (r *RKE2Installer) validatePackageIntegrityOnAllNodes() error {
 	return nil
 }
 
+// getKubeConfig 从控制节点获取kubeconfig并创建客户端配置
+func (r *RKE2Installer) getKubeConfig(controlNode config.Host) (*rest.Config, error) {
+	// 从控制节点获取kubeconfig内容
+	cmd := r.buildSSHCommand(controlNode, "cat /etc/rancher/rke2/rke2.yaml")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("从节点 %s 获取kubeconfig失败: %w", controlNode.IP, err)
+	}
+
+	// 解析kubeconfig
+	config, err := clientcmd.Load(output)
+	if err != nil {
+		return nil, fmt.Errorf("解析kubeconfig失败: %w", err)
+	}
+
+	// 修正server地址为控制节点的外网IP
+	if config.Clusters["default"] != nil {
+		config.Clusters["default"].Server = fmt.Sprintf("https://%s:6443", controlNode.IP)
+	}
+
+	// 创建客户端配置
+	clientConfig := clientcmd.NewDefaultClientConfig(*config, &clientcmd.ConfigOverrides{})
+	restConfig, err := clientConfig.ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("创建Kubernetes客户端配置失败: %w", err)
+	}
+
+	return restConfig, nil
+}
+
+// createKubernetesClient 创建Kubernetes客户端
+func (r *RKE2Installer) createKubernetesClient(controlNode config.Host) (kubernetes.Interface, error) {
+	restConfig, err := r.getKubeConfig(controlNode)
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return nil, fmt.Errorf("创建Kubernetes客户端失败: %w", err)
+	}
+
+	return client, nil
+}
+
+// ensureKubernetesClient 确保Kubernetes客户端已创建并可用
+func (r *RKE2Installer) ensureKubernetesClient() error {
+	if r.kubeClient != nil {
+		return nil
+	}
+
+	// 找到第一个控制节点
+	controlNodes := r.getServerHosts()
+	if len(controlNodes) == 0 {
+		return fmt.Errorf("未找到控制节点")
+	}
+
+	client, err := r.createKubernetesClient(controlNodes[0])
+	if err != nil {
+		return err
+	}
+
+	r.kubeClient = client
+	return nil
+}
+
 // addWorkerLabels 为包含worker角色的节点添加 node-role.kubernetes.io/worker=worker 标签
 func (r *RKE2Installer) addWorkerLabels(controlNode config.Host) error {
 	if r.logger != nil {
 		r.logger.Info("开始为worker节点添加角色标签...")
+	}
+
+	// 确保Kubernetes客户端已创建
+	if err := r.ensureKubernetesClient(); err != nil {
+		return fmt.Errorf("创建Kubernetes客户端失败: %w", err)
 	}
 
 	// 获取包含worker角色的所有节点
@@ -2238,44 +2362,79 @@ func (r *RKE2Installer) addWorkerLabels(controlNode config.Host) error {
 		r.logger.Info("发现 %d 个worker节点需要添加标签", len(workerNodes))
 	}
 
-	// 为每个worker节点添加标签
+	// 获取所有Kubernetes节点
+	nodes, err := r.kubeClient.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("获取Kubernetes节点列表失败: %w", err)
+	}
+
 	successCount := 0
 	for i, workerHost := range workerNodes {
-		nodeName := r.getNodeName(workerHost)
 		if r.logger != nil {
-			r.logger.Info("为节点 %s (%s) 添加worker标签 (%d/%d)", workerHost.IP, nodeName, i+1, len(workerNodes))
+			r.logger.Info("为节点 %s 添加worker标签 (%d/%d)", workerHost.IP, i+1, len(workerNodes))
 		}
 
-		// 首先检查节点是否存在并且就绪
-		checkCommand := fmt.Sprintf("kubectl get node %s -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null || echo 'NotFound'", nodeName)
-		cmd := r.buildSSHCommand(controlNode, checkCommand)
-		checkOutput, err := cmd.CombinedOutput()
+		// 通过IP地址匹配Kubernetes节点
+		var targetNode *corev1.Node
+		workerIP := r.getNodeIP(workerHost)
 		
-		if err != nil || strings.TrimSpace(string(checkOutput)) != "True" {
+		for _, node := range nodes.Items {
+			for _, addr := range node.Status.Addresses {
+				if (addr.Type == corev1.NodeInternalIP || addr.Type == corev1.NodeExternalIP) && addr.Address == workerIP {
+					targetNode = &node
+					break
+				}
+			}
+			if targetNode != nil {
+				break
+			}
+		}
+
+		if targetNode == nil {
 			if r.logger != nil {
-				r.logger.Warn("节点 %s (%s) 未就绪或不存在，跳过添加标签: %s", workerHost.IP, nodeName, strings.TrimSpace(string(checkOutput)))
+				r.logger.Warn("无法找到IP为 %s 的Kubernetes节点，跳过添加标签", workerIP)
 			}
 			continue
 		}
 
-		// 构建kubectl命令来添加标签
-		labelCommand := fmt.Sprintf("kubectl label node %s node-role.kubernetes.io/worker=worker --overwrite", nodeName)
-		
-		// 在控制节点上执行命令
-		cmd = r.buildSSHCommand(controlNode, labelCommand)
-		output, err := cmd.CombinedOutput()
-		
+		if r.logger != nil {
+			r.logger.Info("找到节点 %s 对应的Kubernetes节点名: %s", workerHost.IP, targetNode.Name)
+		}
+
+		// 检查节点是否就绪
+		isReady := false
+		for _, condition := range targetNode.Status.Conditions {
+			if condition.Type == corev1.NodeReady && condition.Status == corev1.ConditionTrue {
+				isReady = true
+				break
+			}
+		}
+
+		if !isReady {
+			if r.logger != nil {
+				r.logger.Warn("节点 %s (%s) 未就绪，跳过添加标签", workerHost.IP, targetNode.Name)
+			}
+			continue
+		}
+
+		// 添加worker标签
+		if targetNode.Labels == nil {
+			targetNode.Labels = make(map[string]string)
+		}
+		targetNode.Labels["node-role.kubernetes.io/worker"] = "worker"
+
+		// 更新节点
+		_, err := r.kubeClient.CoreV1().Nodes().Update(context.TODO(), targetNode, metav1.UpdateOptions{})
 		if err != nil {
 			if r.logger != nil {
-				r.logger.Warn("为节点 %s 添加worker标签失败: %v, 输出: %s", workerHost.IP, err, string(output))
+				r.logger.Warn("为节点 %s (%s) 添加worker标签失败: %v", workerHost.IP, targetNode.Name, err)
 			}
-			// 不返回错误，继续处理其他节点
 			continue
 		}
 
 		successCount++
 		if r.logger != nil {
-			r.logger.Info("节点 %s (%s) worker标签添加成功", workerHost.IP, nodeName)
+			r.logger.Info("节点 %s (%s) worker标签添加成功", workerHost.IP, targetNode.Name)
 		}
 	}
 
