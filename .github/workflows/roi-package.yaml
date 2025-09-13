@@ -1,0 +1,30 @@
+name: "roi-package"
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'version'
+        required: true
+        default: 'v6.3.3-release'
+      arch:
+        description: 'arch'
+        required: true
+        default: 'amd64'
+        type: choice
+        options:
+          - amd64
+          - arm64
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          ref: main
+
+      - name: build package
+        run: |
+          ARCH=${{ github.event.inputs.arch }} VERSION=${{ github.event.inputs.version }} bash ./release.sh
+
