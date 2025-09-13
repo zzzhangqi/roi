@@ -61,10 +61,10 @@ The tool automates the entire deployment process including:
 	},
 }
 
-var installCmd = &cobra.Command{
-	Use:   "install",
-	Short: "Install Rainbond cluster with optional operations",
-	Long: `Install Rainbond cluster with support for various operations:
+var upCmd = &cobra.Command{
+	Use:   "up",
+	Short: "Set up or update a Rainbond cluster with optional operations",
+	Long: `Set up or update a Rainbond cluster with support for various operations:
   --check         Check system environment and requirements only
   --lvm           Show LVM status and create LVM configuration only
   --rke2          Install and configure RKE2 Kubernetes cluster only
@@ -73,15 +73,15 @@ var installCmd = &cobra.Command{
   --optimize      Optimize system for containerized environments only
 
 默认行为（不使用任何flags时）：
-  roi install     # 依次执行: 系统检查 -> LVM配置 -> 系统优化 -> RKE2安装 -> MySQL安装 -> Rainbond安装
+  roi up     # 依次执行: 系统检查 -> LVM配置 -> 系统优化 -> RKE2安装 -> MySQL安装 -> Rainbond安装
 
 单独执行某个阶段：
-  roi install --check           # 仅执行系统检查
-  roi install --lvm             # 仅执行LVM配置
-  roi install --rke2            # 仅执行RKE2 Kubernetes安装
-  roi install --mysql           # 仅执行MySQL主从集群安装
-  roi install --rainbond        # 仅执行Rainbond安装
-  roi install --optimize        # 仅执行系统优化`,
+  roi up --check           # 仅执行系统检查
+  roi up --lvm             # 仅执行LVM配置
+  roi up --rke2            # 仅执行RKE2 Kubernetes安装
+  roi up --mysql           # 仅执行MySQL主从集群安装
+  roi up --rainbond        # 仅执行Rainbond安装
+  roi up --optimize        # 仅执行系统优化`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		configFile := cfgFile
 		if configFile == "" {
@@ -476,18 +476,18 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default search: ./config.yaml)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 
-	installCmd.Flags().BoolVar(&checkFlag, "check", false, "Check system environment and requirements")
-	installCmd.Flags().BoolVar(&lvmFlag, "lvm", false, "Show LVM status and create LVM configuration")
-	installCmd.Flags().BoolVar(&rke2Flag, "rke2", false, "Install and configure RKE2 Kubernetes cluster")
-	installCmd.Flags().BoolVar(&mysqlFlag, "mysql", false, "Install and configure MySQL master-slave cluster")
-	installCmd.Flags().BoolVar(&rainbondFlag, "rainbond", false, "Install and configure Rainbond")
-	installCmd.Flags().BoolVar(&optimizeFlag, "optimize", false, "Optimize system for containerized environments")
+	upCmd.Flags().BoolVar(&checkFlag, "check", false, "Check system environment and requirements")
+	upCmd.Flags().BoolVar(&lvmFlag, "lvm", false, "Show LVM status and create LVM configuration")
+	upCmd.Flags().BoolVar(&rke2Flag, "rke2", false, "Install and configure RKE2 Kubernetes cluster")
+	upCmd.Flags().BoolVar(&mysqlFlag, "mysql", false, "Install and configure MySQL master-slave cluster")
+	upCmd.Flags().BoolVar(&rainbondFlag, "rainbond", false, "Install and configure Rainbond")
+	upCmd.Flags().BoolVar(&optimizeFlag, "optimize", false, "Optimize system for containerized environments")
 
 	sshSetupCmd.Flags().BoolVar(&sshUnifiedPassword, "unified-password", false, "All hosts use the same password")
 	sshSetupCmd.Flags().BoolVar(&sshForceGenerate, "force-generate", false, "Force generate new SSH key pair")
 	sshSetupCmd.Flags().StringVar(&sshMethod, "method", "auto", "SSH setup method: auto, ssh-copy-id, expect, native-go")
 
-	rootCmd.AddCommand(installCmd)
+	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(sshSetupCmd)
 }
 
