@@ -15,6 +15,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"gopkg.in/yaml.v3"
 )
 
 // Logger 定义日志接口
@@ -1429,15 +1430,39 @@ configs:
     tls:
       insecure_skip_verify: true`
 	}
+	
+	// 清理registry配置内容，移除可能导致YAML解析错误的字符
+	registryConfig = strings.TrimSpace(registryConfig)
+	
+	// 基本YAML格式验证
+	if err := r.validateRegistryYAML(registryConfig); err != nil {
+		if r.logger != nil {
+			r.logger.Error("Registry配置YAML格式错误: %v", err)
+		}
+		return fmt.Errorf("Registry配置YAML格式错误: %w", err)
+	}
 
 	registryConfigPath := "/etc/rancher/rke2/registries.yaml"
 
+	// 验证YAML格式并生成文件
 	createRegistryConfigCmd := fmt.Sprintf(`
+		# 创建目录
+		mkdir -p $(dirname %s)
+		
+		# 生成registries.yaml文件
 		cat > %s << 'EOF'
 %s
 EOF
-		echo "RKE2镜像仓库配置文件创建完成"
-	`, registryConfigPath, registryConfig)
+		
+		# 验证YAML文件格式
+		if command -v yq >/dev/null 2>&1; then
+			yq eval . %s >/dev/null || echo "Warning: registries.yaml may have YAML format issues"
+		fi
+		
+		echo "RKE2镜像仓库配置文件创建完成: %s"
+		echo "文件内容:"
+		cat %s
+	`, registryConfigPath, registryConfigPath, registryConfig, registryConfigPath, registryConfigPath, registryConfigPath)
 
 	sshCmd := r.buildSSHCommand(host, createRegistryConfigCmd)
 	if err := sshCmd.Run(); err != nil {
@@ -2509,6 +2534,28 @@ func (r *RKE2Installer) addWorkerLabels(controlNode config.Host) error {
 
 	if r.logger != nil {
 		r.logger.Info("worker节点标签添加完成: 成功 %d/%d", successCount, len(workerNodes))
+	}
+	return nil
+}
+
+// validateRegistryYAML 验证registry配置的YAML格式
+func (r *RKE2Installer) validateRegistryYAML(registryConfig string) error {
+	var data map[string]interface{}
+	if err := yaml.Unmarshal([]byte(registryConfig), &data); err != nil {
+		if r.logger != nil {
+			r.logger.Error("YAML解析失败: %v", err)
+			r.logger.Error("问题配置内容: %s", registryConfig)
+		}
+		return fmt.Errorf("YAML解析失败: %w", err)
+	}
+	
+	// 检查必要的字段结构
+	if _, hasMirrors := data["mirrors"]; !hasMirrors {
+		return fmt.Errorf("registry配置缺少必需的 'mirrors' 字段")
+	}
+	
+	if r.logger != nil {
+		r.logger.Debug("Registry YAML格式验证通过")
 	}
 	return nil
 }
