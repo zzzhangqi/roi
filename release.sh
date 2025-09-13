@@ -75,7 +75,7 @@ download_rainbond_chart() {
 
 build_roi() {
 docker run --rm -v "$(pwd)":/workspace -w /workspace -e GOPROXY=https://goproxy.cn,direct -e GOSUMDB=sum.golang.google.cn \
-  registry.cn-hangzhou.aliyuncs.com/zqqq/golang:1.20 \
+  registry.cn-hangzhou.aliyuncs.com/zqqq/golang:1.24 \
   sh -c "go mod tidy && go build -o roi cmd/main.go"
 
 }
@@ -84,7 +84,7 @@ upload_tos() {
   wget https://m645b3e1bb36e-mrap.mrap.accesspoint.tos-global.volces.com/linux/$ARCH/tosutil
   chmod +x tosutil
   ./tosutil config -i "$TOS_ACCESS_KEY" -k "$TOS_SECRET_KEY" -e tos-cn-beijing.volces.com -re cn-beijing
-  ./tosutil cp roi.tar.gz tos://rainbond-pkg/v6.x/roi-$ARCH.tar.gz
+  ./tosutil cp roi.tar.gz tos://rainbond-pkg/v6.x/rainbond-offline-installer-package-${VERSION%-release}-"$ARCH".tar.gz
 }
 
 main() {
@@ -94,17 +94,19 @@ main() {
   download_helm
   download_rainbond_chart
 
-  mkdir roi-offline-package
-  mv roi roi-offline-package
-  mv rainbond.tgz roi-offline-package
-  mv rainbond-offline-images.tar roi-offline-package
-  mv rke2-images-linux.tar roi-offline-package
-  mv rke2.linux-$ARCH.tar.gz roi-offline-package
-  mv rke2-install.sh roi-offline-package
-  mv sha256sum-$ARCH.txt roi-offline-package
-  mv helm roi-offline-package
+  offline_package_dir=rainbond-offline-installer-package-${VERSION%-release}
 
-  tar -zcvf roi.tar.gz roi-offline-package
+  mkdir "$offline_package_dir"
+  mv roi "$offline_package_dir"
+  mv rainbond.tgz "$offline_package_dir"
+  mv rainbond-offline-images.tar "$offline_package_dir"
+  mv rke2-images-linux.tar "$offline_package_dir"
+  mv rke2.linux-"$ARCH".tar.gz "$offline_package_dir"
+  mv rke2-install.sh "$offline_package_dir"
+  mv sha256sum-"$ARCH".txt "$offline_package_dir"
+  mv helm "$offline_package_dir"
+
+  tar -zcvf rainbond-offline-installer-package-${VERSION%-release}-"$ARCH".tar.gz "$offline_package_dir"
   upload_tos
 }
 

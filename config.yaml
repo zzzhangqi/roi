@@ -10,20 +10,61 @@
 # - rbd_role: Rainbond角色，支持 rbd-gateway、rbd-chaos
 hosts:
 # 第一个节点：etcd节点（必须包含etcd）+ gateway节点
-- ip: 10.10.152.0
-  internal_ip: 10.10.152.0
+- ip: 10.10.152.36
+  internal_ip: 10.10.152.36
   user: root
   ssh_key: ~/.ssh/id_rsa
   role: 
   - master
   - etcd
-  - worker
   rbd_role:
   - rbd-gateway
+  mysql_master: true
+
+- ip: 10.10.152.37
+  internal_ip: 10.10.152.37
+  user: root
+  ssh_key: ~/.ssh/id_rsa
+  role: 
+  - master
+  - etcd
+  rbd_role:
+  - rbd-gateway
+  mysql_slave: true
+
+- ip: 10.10.152.38
+  internal_ip: 10.10.152.38
+  user: root
+  ssh_key: ~/.ssh/id_rsa
+  role: 
+  - etcd
+  rbd_role:
+  - rbd-gateway
+
+- ip: 10.10.152.39
+  internal_ip: 10.10.152.39
+  user: root
+  ssh_key: ~/.ssh/id_rsa
+  role: 
+  - worker
+  rbd_role:
   - rbd-chaos
-  node-taint:
-  - custom-name=k8s-app:NoSchedule
-  # mysql_master: true
+
+- ip: 10.10.152.40
+  internal_ip: 10.10.152.40
+  user: root
+  ssh_key: ~/.ssh/id_rsa
+  role: 
+  - worker
+  rbd_role:
+  - rbd-chaos
+
+- ip: 10.10.152.41
+  internal_ip: 10.10.152.41
+  user: root
+  ssh_key: ~/.ssh/id_rsa
+  role: 
+  - worker
 
   # - ip: 10.10.152.1
   #   internal_ip: 10.10.152.1
@@ -56,6 +97,30 @@ hosts:
     
     
 
+# RKE2 Kubernetes 配置（可选）
+rke2:
+  registry_config: |
+    mirrors:
+      "10.10.152.29:5000":
+        endpoint:
+          - "http://10.10.152.29:5000"
+      "goodrain.me":
+        endpoint:
+          - "https://goodrain.me"
+    configs:
+      "goodrain.me":
+        auth:
+          username: admin
+          password: admin1234
+        tls:
+          insecure_skip_verify: true
+      "10.10.152.29:5000":
+        auth:
+          username: admin
+          password: admin1234
+        tls:
+          insecure_skip_verify: true
+
 # MySQL 主从集群配置（完全可选）
 # 注意：MySQL会根据hosts中是否有mysql_master或mysql_slave节点自动启用/禁用
 # 用户只需要在需要MySQL的节点上设置mysql_master: true 或 mysql_slave: true
@@ -64,14 +129,20 @@ hosts:
 #   data_path: "/opt/rainbond/mysql" # 可选，数据存储路径
 
 # Rainbond 配置（可选，所有配置都有默认值）
-# rainbond:
+rainbond:
 #   namespace: "rbd-system"  # 默认值
-#   values:
-#     Cluster:
+  values:
+    Cluster:
 #       containerdRuntimePath: /var/run/k3s/containerd  # 默认值
 #       nodesForGateway: []      # 从 hosts 中 rbd_role 包含 rbd-gateway 的节点自动生成
 #       nodesForChaos: []        # 从 hosts 中 rbd_role 包含 rbd-chaos 的节点自动生成  
 #       gatewayIngressIPs: ""    # 自动从第一个 rbd-gateway 节点的 IP 获取
+      imageHub:
+          enable: true
+          domain: 10.10.152.29:5000
+          namespace: rainbond
+          username: admin
+          password: admin
 #     Component:
 #       rbd_app_ui:
 #         env:
