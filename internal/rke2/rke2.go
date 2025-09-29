@@ -728,7 +728,7 @@ func (r *RKE2Installer) transferRKE2Artifacts(host config.Host) error {
 		{"rke2-install.sh", "/tmp/rke2-artifacts/rke2-install.sh", true},
 		{"rke2.linux*.tar.gz", "/tmp/rke2-artifacts/rke2.linux*.tar.gz", true},
 		{"sha256sum*.txt", "/tmp/rke2-artifacts/sha256sum*.txt", true},
-		{"rke2-images-linux.tar.gz", "/var/lib/rancher/rke2/agent/images/rke2-images.linux.tar", true},
+		{"rke2-images-linux.tar.zst", "/var/lib/rancher/rke2/agent/images/rke2-images-linux.tar.zst", true},
 		{"rainbond-offline-images.tar", "/var/lib/rancher/rke2/agent/images/rainbond-offline-images.tar", true},
 	}
 
@@ -2300,7 +2300,7 @@ func (r *RKE2Installer) validatePackageIntegrityOnAllNodes() error {
 		{"rke2-install.sh", "/tmp/rke2-artifacts/rke2-install.sh", true},
 		{"rke2.linux*.tar.gz", "/tmp/rke2-artifacts/rke2.linux*.tar.gz", true},
 		{"sha256sum*.txt", "/tmp/rke2-artifacts/sha256sum*.txt", true},
-		{"rke2-images-linux.tar.gz", "/var/lib/rancher/rke2/agent/images/rke2-images.linux.tar", true},
+		{"rke2-images-linux.tar.zst", "/var/lib/rancher/rke2/agent/images/rke2-images-linux.tar.zst", true},
 		{"rainbond-offline-images.tar", "/var/lib/rancher/rke2/agent/images/rainbond-offline-images.tar", true},
 	}
 

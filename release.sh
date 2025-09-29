@@ -62,7 +62,7 @@ download_image() {
 
 
 download_rke2() {
-  wget -O rke2-images-linux.tar.gz $RKE2_URL/rke2/releases/download/$RKE2_VERSION/rke2-images.linux-"$ARCH".tar.gz
+  wget -O rke2-images-linux.tar.zst $RKE2_URL/rke2/releases/download/$RKE2_VERSION/rke2-images.linux-"$ARCH".tar.zst
   wget -O rke2.linux-"$ARCH".tar.gz $RKE2_URL/rke2/releases/download/$RKE2_VERSION/rke2.linux-"$ARCH".tar.gz
   wget -O sha256sum-"$ARCH".txt $RKE2_URL/rke2/releases/download/$RKE2_VERSION/sha256sum-"$ARCH".txt
   wget -O rke2-install.sh https://rancher-mirror.rancher.cn/rke2/install.sh
@@ -111,7 +111,7 @@ main() {
   mv roi "$offline_package_dir"
   mv rainbond.tgz "$offline_package_dir"
   mv rainbond-offline-images.tar "$offline_package_dir"
-  mv rke2-images-linux.tar.gz "$offline_package_dir"
+  mv rke2-images-linux.tar.zst "$offline_package_dir"
   mv rke2.linux-"$ARCH".tar.gz "$offline_package_dir"
   mv rke2-install.sh "$offline_package_dir"
   mv sha256sum-"$ARCH".txt "$offline_package_dir"
