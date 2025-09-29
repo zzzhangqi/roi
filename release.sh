@@ -60,7 +60,7 @@ download_image() {
 
 
 download_rke2() {
-  wget -O rke2-images-linux.tar $RKE2_URL/rke2/releases/download/v1.30.4+rke2r1/rke2-images-linux-"$ARCH".tar
+  wget -O rke2-images-linux.tar $RKE2_URL/rke2/releases/download/v1.30.4+rke2r1/rke2-images.linux-"$ARCH".tar
   wget -O rke2.linux-"$ARCH".tar.gz $RKE2_URL/rke2/releases/download/v1.30.4+rke2r1/rke2.linux-"$ARCH".tar.gz
   wget -O sha256sum-"$ARCH".txt $RKE2_URL/rke2/releases/download/v1.30.4+rke2r1/sha256sum-"$ARCH".txt
   wget -O rke2-install.sh https://rancher-mirror.rancher.cn/rke2/install.sh
