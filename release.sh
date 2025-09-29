@@ -111,7 +111,7 @@ main() {
   mv roi "$offline_package_dir"
   mv rainbond.tgz "$offline_package_dir"
   mv rainbond-offline-images.tar "$offline_package_dir"
-  mv rke2-images-linux.tar "$offline_package_dir"
+  mv rke2-images-linux.tar.gz "$offline_package_dir"
   mv rke2.linux-"$ARCH".tar.gz "$offline_package_dir"
   mv rke2-install.sh "$offline_package_dir"
   mv sha256sum-"$ARCH".txt "$offline_package_dir"
