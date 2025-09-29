@@ -146,6 +146,12 @@ rainbond:
 #     Component:
 #       rbd_app_ui:
 #         env:
-#         - name: DISABLE_DEFAULT_APP_MARKET
+#         - name: DISABLE_DEFAULT_APP_MARKET # 默认添加
 #           value: "true"
     
+
+rainbond:
+  values:
+    Component:
+      rbd_app_ui:
+        enable: false
