@@ -21,10 +21,12 @@ if [ "$MIRROR" == "cn" ]; then
   RKE2_URL=https://pkg.rainbond.com
   IMAGE_DOMAIN=registry.cn-hangzhou.aliyuncs.com
   IMAGE_NAMESPACE=goodrain
+  RKE2_VERSION=v1.30.4-rke2r1
 else
   RKE2_URL=https://github.com/rancher
   IMAGE_DOMAIN=docker.io
   IMAGE_NAMESPACE=rainbond
+  RKE2_VERSION=v1.30.4+rke2r1
 fi
 
 download_image() {
@@ -60,9 +62,9 @@ download_image() {
 
 
 download_rke2() {
-  wget -O rke2-images-linux.tar $RKE2_URL/rke2/releases/download/v1.30.4+rke2r1/rke2-images.linux-"$ARCH".tar
-  wget -O rke2.linux-"$ARCH".tar.gz $RKE2_URL/rke2/releases/download/v1.30.4+rke2r1/rke2.linux-"$ARCH".tar.gz
-  wget -O sha256sum-"$ARCH".txt $RKE2_URL/rke2/releases/download/v1.30.4+rke2r1/sha256sum-"$ARCH".txt
+  wget -O rke2-images-linux.tar.gz $RKE2_URL/rke2/releases/download/$RKE2_VERSION/rke2-images.linux-"$ARCH".tar.gz
+  wget -O rke2.linux-"$ARCH".tar.gz $RKE2_URL/rke2/releases/download/$RKE2_VERSION/rke2.linux-"$ARCH".tar.gz
+  wget -O sha256sum-"$ARCH".txt $RKE2_URL/rke2/releases/download/$RKE2_VERSION/sha256sum-"$ARCH".txt
   wget -O rke2-install.sh https://rancher-mirror.rancher.cn/rke2/install.sh
 }
 

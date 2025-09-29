@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"github.com/rainbond/rainbond-offline-installer/pkg/config"
+	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	"gopkg.in/yaml.v3"
 )
 
 // Logger 定义日志接口
@@ -261,7 +261,7 @@ func (r *RKE2Installer) Run() error {
 			continue // 跳过第一个节点
 		}
 		etcdCount++
-		
+
 		if r.stepProgress != nil {
 			r.stepProgress.StartNodeProcessing(etcdHost.IP)
 		}
@@ -295,7 +295,7 @@ func (r *RKE2Installer) Run() error {
 			continue // 跳过第一个节点（如果它已经是master）
 		}
 		masterCount++
-		
+
 		if r.stepProgress != nil {
 			r.stepProgress.StartNodeProcessing(masterHost.IP)
 		}
@@ -728,7 +728,7 @@ func (r *RKE2Installer) transferRKE2Artifacts(host config.Host) error {
 		{"rke2-install.sh", "/tmp/rke2-artifacts/rke2-install.sh", true},
 		{"rke2.linux*.tar.gz", "/tmp/rke2-artifacts/rke2.linux*.tar.gz", true},
 		{"sha256sum*.txt", "/tmp/rke2-artifacts/sha256sum*.txt", true},
-		{"rke2-images-linux.tar", "/var/lib/rancher/rke2/agent/images/rke2-images.linux.tar", true},
+		{"rke2-images-linux.tar.gz", "/var/lib/rancher/rke2/agent/images/rke2-images.linux.tar", true},
 		{"rainbond-offline-images.tar", "/var/lib/rancher/rke2/agent/images/rainbond-offline-images.tar", true},
 	}
 
@@ -1230,13 +1230,13 @@ func (r *RKE2Installer) getNodeConfigSection(host config.Host) string {
 func (r *RKE2Installer) getRecommendedTaints(host config.Host) []string {
 	roles := r.normalizeRoles(host.Role)
 	isControlPlane := r.hasRole(roles, "etcd") || r.hasRole(roles, "master")
-	
+
 	// 如果用户明确配置了NodeTaint，先检查是否可能导致问题
 	if len(host.NodeTaint) > 0 {
 		if r.logger != nil {
 			r.logger.Info("主机 %s: 检测到用户配置的污点: %v", host.IP, host.NodeTaint)
 		}
-		
+
 		// 检查是否使用了可能导致系统组件调度问题的污点
 		for _, taint := range host.NodeTaint {
 			if strings.Contains(taint, ":NoSchedule") && isControlPlane {
@@ -1249,20 +1249,20 @@ func (r *RKE2Installer) getRecommendedTaints(host config.Host) []string {
 				}
 			}
 		}
-		
+
 		// 使用用户配置的污点
 		return host.NodeTaint
 	}
-	
+
 	// 如果没有用户配置的污点，根据集群组成自动推荐
 	if !isControlPlane {
 		// 非控制平面节点不需要污点
 		return []string{}
 	}
-	
+
 	hasWorkers := r.hasWorkerNodes()
 	var recommendedTaints []string
-	
+
 	if hasWorkers {
 		// 有worker节点的情况：使用标准的control-plane污点
 		// 这个污点被大多数系统组件的tolerations支持
@@ -1282,7 +1282,7 @@ func (r *RKE2Installer) getRecommendedTaints(host config.Host) []string {
 			r.logger.Info("主机 %s: 集群只有控制平面节点，使用PreferNoSchedule策略以确保系统组件能够正常调度", host.IP)
 		}
 	}
-	
+
 	return recommendedTaints
 }
 
@@ -1386,7 +1386,6 @@ EOF
 	rainbondConfig := `# Rainbond定制配置
 disable:
 - rke2-ingress-nginx
-system-default-registry: registry.cn-hangzhou.aliyuncs.com
 `
 
 	createCustomConfigCmd := fmt.Sprintf(`
@@ -1430,10 +1429,10 @@ configs:
     tls:
       insecure_skip_verify: true`
 	}
-	
+
 	// 清理registry配置内容，移除可能导致YAML解析错误的字符
 	registryConfig = strings.TrimSpace(registryConfig)
-	
+
 	// 基本YAML格式验证
 	if err := r.validateRegistryYAML(registryConfig); err != nil {
 		if r.logger != nil {
@@ -1899,12 +1898,12 @@ func (r *RKE2Installer) printRKE2Status(status map[string]*RKE2Status) {
 	if failed > 0 {
 		statusSummary = append(statusSummary, fmt.Sprintf("%d个节点有问题", failed))
 	}
-	
+
 	statusText := strings.Join(statusSummary, ", ")
 	if statusText == "" {
 		statusText = "无节点状态信息"
 	}
-	
+
 	if r.logger != nil {
 		r.logger.Debug(fmt.Sprintf("集群总结: %s（共%d个节点: %d个Server, %d个Agent）",
 			statusText, total, servers, agents))
@@ -2114,7 +2113,7 @@ func (r *RKE2Installer) waitForNodeReady(host config.Host) error {
 
 		readyCount := 0
 		totalCount := len(nodes.Items)
-		
+
 		// 检查节点就绪状态
 		for _, node := range nodes.Items {
 			for _, condition := range node.Status.Conditions {
@@ -2301,7 +2300,7 @@ func (r *RKE2Installer) validatePackageIntegrityOnAllNodes() error {
 		{"rke2-install.sh", "/tmp/rke2-artifacts/rke2-install.sh", true},
 		{"rke2.linux*.tar.gz", "/tmp/rke2-artifacts/rke2.linux*.tar.gz", true},
 		{"sha256sum*.txt", "/tmp/rke2-artifacts/sha256sum*.txt", true},
-		{"rke2-images-linux.tar", "/var/lib/rancher/rke2/agent/images/rke2-images.linux.tar", true},
+		{"rke2-images-linux.tar.gz", "/var/lib/rancher/rke2/agent/images/rke2-images.linux.tar", true},
 		{"rainbond-offline-images.tar", "/var/lib/rancher/rke2/agent/images/rainbond-offline-images.tar", true},
 	}
 
@@ -2471,7 +2470,7 @@ func (r *RKE2Installer) addWorkerLabels(controlNode config.Host) error {
 		// 通过IP地址匹配Kubernetes节点
 		var targetNode *corev1.Node
 		workerIP := r.getNodeIP(workerHost)
-		
+
 		for _, node := range nodes.Items {
 			for _, addr := range node.Status.Addresses {
 				if (addr.Type == corev1.NodeInternalIP || addr.Type == corev1.NodeExternalIP) && addr.Address == workerIP {
@@ -2548,12 +2547,12 @@ func (r *RKE2Installer) validateRegistryYAML(registryConfig string) error {
 		}
 		return fmt.Errorf("YAML解析失败: %w", err)
 	}
-	
+
 	// 检查必要的字段结构
 	if _, hasMirrors := data["mirrors"]; !hasMirrors {
 		return fmt.Errorf("registry配置缺少必需的 'mirrors' 字段")
 	}
-	
+
 	if r.logger != nil {
 		r.logger.Debug("Registry YAML格式验证通过")
 	}
