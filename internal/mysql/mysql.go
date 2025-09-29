@@ -641,7 +641,7 @@ func (m *MySQLInstaller) deployMaster() error {
 		m.logger.Debug("生成MySQL Master YAML，参数: nodeName=%s, rootPassword=%s, replUser=%s, replPassword=%s, dataPath=%s",
 			masterNodeName, m.config.MySQL.RootPassword, m.config.MySQL.ReplUser, m.config.MySQL.ReplPassword, m.config.MySQL.DataPath)
 	}
-	
+
 	yamlContent := fmt.Sprintf(mysqlMasterYAML,
 		masterNodeName,              // nodeName for direct binding
 		m.config.MySQL.RootPassword, // MYSQL_ROOT_PASSWORD
@@ -649,7 +649,7 @@ func (m *MySQLInstaller) deployMaster() error {
 		m.config.MySQL.ReplPassword, // MYSQL_REPLICATION_PASSWORD
 		m.config.MySQL.DataPath,     // hostPath
 	)
-	
+
 	if m.logger != nil {
 		m.logger.Debug("生成的MySQL Master YAML长度: %d", len(yamlContent))
 	}
@@ -674,7 +674,7 @@ func (m *MySQLInstaller) deploySlave() error {
 		m.logger.Debug("生成MySQL Slave YAML，参数: nodeName=%s, rootPassword=%s, replUser=%s, replPassword=%s, dataPath=%s",
 			slaveNodeName, m.config.MySQL.RootPassword, m.config.MySQL.ReplUser, m.config.MySQL.ReplPassword, m.config.MySQL.DataPath)
 	}
-	
+
 	yamlContent := fmt.Sprintf(mysqlSlaveYAML,
 		slaveNodeName,               // nodeName for direct binding
 		m.config.MySQL.RootPassword, // MYSQL_MASTER_ROOT_PASSWORD
@@ -682,7 +682,7 @@ func (m *MySQLInstaller) deploySlave() error {
 		m.config.MySQL.ReplPassword, // MYSQL_REPLICATION_PASSWORD
 		m.config.MySQL.DataPath,     // hostPath
 	)
-	
+
 	if m.logger != nil {
 		m.logger.Debug("生成的MySQL Slave YAML长度: %d", len(yamlContent))
 	}
@@ -1037,17 +1037,17 @@ func (m *MySQLInstaller) applyYAMLContent(yamlContent string) error {
 
 	// 创建解码器
 	decoder := serializer.NewCodecFactory(scheme.Scheme).UniversalDeserializer()
-	
+
 	// 按文档分割YAML内容
 	docs := strings.Split(yamlContent, "---")
-	
+
 	resourceCount := 0
 	for i, doc := range docs {
 		doc = strings.TrimSpace(doc)
 		if doc == "" {
 			continue
 		}
-		
+
 		// 跳过只包含注释的文档，但不跳过包含YAML资源的文档
 		lines := strings.Split(doc, "\n")
 		hasContent := false
@@ -1058,7 +1058,7 @@ func (m *MySQLInstaller) applyYAMLContent(yamlContent string) error {
 				break
 			}
 		}
-		
+
 		if !hasContent {
 			if m.logger != nil {
 				m.logger.Debug("跳过纯注释文档 %d", i)
@@ -1122,7 +1122,6 @@ func (m *MySQLInstaller) createKubernetesResource(obj runtime.Object, gvk *schem
 		return nil
 	}
 }
-
 
 // waitForPodsReady 等待指定标签的Pod就绪
 func (m *MySQLInstaller) waitForPodsReady(labelSelector string, componentName string) error {
@@ -1230,20 +1229,14 @@ func (m *MySQLInstaller) createOrUpdateJob(job *batchv1.Job) error {
 		m.logger.Debug("创建Job: %s/%s", job.Namespace, job.Name)
 	}
 
-	// 对于Job，通常我们需要先删除现有的，然后创建新的
-	// 因为Job的spec字段通常是不可变的
-	err := m.kubeClient.BatchV1().Jobs(job.Namespace).Delete(context.TODO(), job.Name, metav1.DeleteOptions{})
-	if err != nil && !strings.Contains(err.Error(), "not found") {
-		if m.logger != nil {
-			m.logger.Warn("删除现有Job %s时出错: %v", job.Name, err)
-		}
-	}
-
-	// 等待Job删除完成
-	time.Sleep(2 * time.Second)
-
-	// 创建新的Job
-	_, err = m.kubeClient.BatchV1().Jobs(job.Namespace).Create(context.TODO(), job, metav1.CreateOptions{})
+	// 直接创建新的Job，不删除旧的
+	// ttlSecondsAfterFinished配置会自动清理完成的Job
+	// 为避免名称冲突，给Job名称添加时间戳后缀
+	timestamp := time.Now().Format("20060102-150405")
+	originalName := job.Name
+	job.Name = fmt.Sprintf("%s-%s", originalName, timestamp)
+	
+	_, err := m.kubeClient.BatchV1().Jobs(job.Namespace).Create(context.TODO(), job, metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("创建Job %s失败: %w", job.Name, err)
 	}

@@ -1,8 +1,7 @@
 #!/bin/bash
 
-IMAGE_DOMAIN=registry.cn-hangzhou.aliyuncs.com
-IMAGE_NAMESPACE=goodrain
-VERSION=v6.3.2-release
+VERSION=${VERSION:-v6.3.4-release}
+MIRROR=${MIRROR:-cn}
 
 # Accept architecture from environment variable, fallback to system detection
 if [ -n "$ARCH" ]; then
@@ -16,6 +15,16 @@ else
     ARCH="arm64"
   fi
   echo "Auto-detected architecture: $ARCH"
+fi
+
+if [ "$MIRROR" == "cn" ]; then
+  RKE2_URL=https://pkg.rainbond.com
+  IMAGE_DOMAIN=registry.cn-hangzhou.aliyuncs.com
+  IMAGE_NAMESPACE=goodrain
+else
+  RKE2_URL=https://github.com/rancher
+  IMAGE_DOMAIN=docker.io
+  IMAGE_NAMESPACE=rainbond
 fi
 
 download_image() {
@@ -39,21 +48,21 @@ download_image() {
   )
 
   for image in "${image_list[@]}"; do
-    docker pull "${image}"
+    docker pull --platform linux/"${ARCH}" "${image}"
   done
 
   docker save -o rainbond-offline-images.tar "${image_list[@]}"
 
   for image in "${image_list[@]}"; do
-    docker rmi -f "${image}"
+    docker rmi -f --platform linux/"${ARCH}" "${image}"
   done
 }
 
 
 download_rke2() {
-  wget -O rke2-images-linux.tar https://pkg.rainbond.com/rke2/v1.30.4+rke2r1/rke2-images-linux-$ARCH.tar
-  wget -O rke2.linux-$ARCH.tar.gz https://pkg.rainbond.com/rke2/v1.30.4+rke2r1/rke2.linux-$ARCH.tar.gz
-  wget -O sha256sum-$ARCH.txt https://pkg.rainbond.com/rke2/v1.30.4+rke2r1/sha256sum-$ARCH.txt
+  wget -O rke2-images-linux.tar $RKE2_URL/rke2/releases/download/v1.30.4+rke2r1/rke2-images-linux-"$ARCH".tar
+  wget -O rke2.linux-"$ARCH".tar.gz $RKE2_URL/rke2/releases/download/v1.30.4+rke2r1/rke2.linux-"$ARCH".tar.gz
+  wget -O sha256sum-"$ARCH".txt $RKE2_URL/rke2/releases/download/v1.30.4+rke2r1/sha256sum-"$ARCH".txt
   wget -O rke2-install.sh https://rancher-mirror.rancher.cn/rke2/install.sh
 }
 
@@ -84,7 +93,7 @@ upload_tos() {
   wget https://m645b3e1bb36e-mrap.mrap.accesspoint.tos-global.volces.com/linux/$ARCH/tosutil
   chmod +x tosutil
   ./tosutil config -i "$TOS_ACCESS_KEY" -k "$TOS_SECRET_KEY" -e tos-cn-beijing.volces.com -re cn-beijing
-  ./tosutil cp roi.tar.gz tos://rainbond-pkg/v6.x/rainbond-offline-installer-package-${VERSION%-release}-"$ARCH".tar.gz
+  ./tosutil cp rainbond-offline-installer-package-${VERSION%-release}-"$ARCH".tar.gz tos://rainbond-pkg/v6.x/rainbond-offline-installer-package-${VERSION%-release}-"$ARCH".tar.gz
 }
 
 main() {
