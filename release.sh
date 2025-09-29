@@ -56,7 +56,7 @@ download_image() {
   docker save -o rainbond-offline-images.tar "${image_list[@]}"
 
   for image in "${image_list[@]}"; do
-    docker rmi -f --platform linux/"${ARCH}" "${image}"
+    docker rmi -f "${image}"
   done
 }
 
