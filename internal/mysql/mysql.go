@@ -750,7 +750,7 @@ func (m *MySQLInstaller) initializeDatabases() error {
 
 	// 等待Job的Pod启动并获取日志
 	var podName string
-	for i := 0; i < 30; i++ { // 等待Pod创建
+	for i := 0; i < 60; i++ { // 等待Pod创建
 		pods, err := m.kubeClient.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{
 			LabelSelector: "job-name=mysql-init-databases",
 		})
@@ -764,7 +764,7 @@ func (m *MySQLInstaller) initializeDatabases() error {
 		if i == 29 {
 			return fmt.Errorf("等待初始化Pod创建超时")
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(10 * time.Second)
 	}
 
 	// 简化版本：定期检查Job状态
@@ -1235,7 +1235,7 @@ func (m *MySQLInstaller) createOrUpdateJob(job *batchv1.Job) error {
 	timestamp := time.Now().Format("20060102-150405")
 	originalName := job.Name
 	job.Name = fmt.Sprintf("%s-%s", originalName, timestamp)
-	
+
 	_, err := m.kubeClient.BatchV1().Jobs(job.Namespace).Create(context.TODO(), job, metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("创建Job %s失败: %w", job.Name, err)

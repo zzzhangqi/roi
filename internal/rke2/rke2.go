@@ -362,7 +362,7 @@ func (r *RKE2Installer) Run() error {
 	}
 
 	// 主动监控节点状态，最多等待120秒
-	maxWaitTime := 120
+	maxWaitTime := 600
 	checkInterval := 10 // 每10秒检查一次
 
 	for elapsed := 0; elapsed < maxWaitTime; elapsed += checkInterval {
